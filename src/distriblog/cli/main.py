@@ -1,0 +1,678 @@
+"""Command-line interface for distriblog."""
+
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+
+import click
+
+from distriblog.core.crypto import KeyPair
+from distriblog.core.identity import Identity, IdentityType, DeviceCapability
+from distriblog.core.storage import Storage
+from distriblog.core.trust import (
+    IdentityAssertion,
+    TrustDelegation,
+    TrustGraph,
+    VerificationLevel,
+)
+from distriblog.content.mime import create_text_message
+
+
+def get_storage() -> Storage:
+    """Get the default storage."""
+    data_dir = Path.home() / ".distriblog"
+    return Storage.open(data_dir / "distriblog.db")
+
+
+def get_default_identity(storage: Storage) -> Identity | None:
+    """Get the default identity."""
+    return storage.get_default_identity()
+
+
+@click.group()
+@click.version_option(version="0.1.0")
+def cli():
+    """Distriblog - Distributed identity and messaging."""
+    pass
+
+
+# Identity commands
+
+
+@cli.group()
+def identity():
+    """Identity management commands."""
+    pass
+
+
+@identity.command("create")
+@click.option("--name", "-n", help="Display name for the identity")
+@click.option("--type", "identity_type", type=click.Choice(["personal", "organization", "ephemeral"]), default="personal")
+@click.option("--default/--no-default", default=True, help="Set as default identity")
+def identity_create(name: str | None, identity_type: str, default: bool):
+    """Create a new identity."""
+    storage = get_storage()
+
+    id_type = IdentityType(identity_type)
+    ident = Identity.create(identity_type=id_type, name=name)
+
+    # Save to storage
+    storage.save_local_identity(ident, is_default=default)
+    storage.close()
+
+    click.echo(f"Created identity: {ident.identity_hash}")
+    if name:
+        click.echo(f"Name: {name}")
+    click.echo(f"Type: {identity_type}")
+
+
+@identity.command("list")
+def identity_list():
+    """List all local identities."""
+    storage = get_storage()
+
+    identities = storage.list_local_identities()
+    default = storage.get_default_identity()
+    default_hash = default.identity_hash if default else None
+
+    storage.close()
+
+    if not identities:
+        click.echo("No identities found. Create one with: distriblog identity create")
+        return
+
+    for identity_hash in identities:
+        marker = "*" if identity_hash == default_hash else " "
+        click.echo(f"{marker} {identity_hash}")
+
+
+@identity.command("show")
+@click.argument("identity_hash", required=False)
+def identity_show(identity_hash: str | None):
+    """Show identity details."""
+    storage = get_storage()
+
+    if identity_hash:
+        ident = storage.get_local_identity(identity_hash)
+        if not ident:
+            # Try to get sigchain for remote identity
+            sigchain = storage.get_sigchain(identity_hash)
+            if sigchain:
+                click.echo(f"Identity: {identity_hash} (remote)")
+                click.echo(f"Events: {len(sigchain.events)}")
+                genesis = sigchain.genesis
+                if genesis and genesis.name:
+                    click.echo(f"Name: {genesis.name}")
+                return
+            click.echo(f"Identity not found: {identity_hash}")
+            return
+    else:
+        ident = get_default_identity(storage)
+        if not ident:
+            click.echo("No default identity. Create one with: distriblog identity create")
+            return
+
+    storage.close()
+
+    click.echo(f"Identity: {ident.identity_hash}")
+    genesis = ident.sigchain.genesis
+    if genesis:
+        if genesis.name:
+            click.echo(f"Name: {genesis.name}")
+        click.echo(f"Type: {genesis.identity_type.value}")
+        click.echo(f"Created: {genesis.timestamp}")
+
+    click.echo(f"Events: {len(ident.sigchain.events)}")
+
+    devices = ident.sigchain.get_active_devices()
+    if devices:
+        click.echo(f"Active devices: {len(devices)}")
+        for device in devices:
+            click.echo(f"  - {device.label} ({device.pubkey[:16]}...)")
+
+    # Verify sigchain
+    valid, error = ident.verify()
+    if valid:
+        click.echo("Sigchain: valid")
+    else:
+        click.echo(f"Sigchain: INVALID - {error}")
+
+
+@identity.command("add-device")
+@click.option("--label", "-l", required=True, help="Label for the device")
+@click.option("--expires", type=int, help="Expiration timestamp (optional)")
+def identity_add_device(label: str, expires: int | None):
+    """Add a device key to your identity."""
+    storage = get_storage()
+    ident = get_default_identity(storage)
+
+    if not ident:
+        click.echo("No default identity. Create one with: distriblog identity create")
+        return
+
+    device_keypair, event = ident.add_device(label=label, expires=expires)
+
+    # Save updated identity
+    storage.save_sigchain(ident.sigchain)
+    storage.close()
+
+    click.echo(f"Added device: {label}")
+    click.echo(f"Device public key: {device_keypair.verify_key.to_hex()}")
+    click.echo(f"Device signing key (SAVE THIS): {device_keypair.signing_key.to_hex()}")
+
+
+@identity.command("revoke-device")
+@click.argument("device_pubkey")
+@click.option("--reason", "-r", help="Reason for revocation")
+def identity_revoke_device(device_pubkey: str, reason: str | None):
+    """Revoke a device key."""
+    storage = get_storage()
+    ident = get_default_identity(storage)
+
+    if not ident:
+        click.echo("No default identity. Create one with: distriblog identity create")
+        return
+
+    event = ident.revoke_device(device_pubkey, reason=reason)
+
+    storage.save_sigchain(ident.sigchain)
+    storage.close()
+
+    click.echo(f"Revoked device: {device_pubkey[:16]}...")
+
+
+@identity.command("set-recovery")
+@click.option("--trustees", "-t", required=True, help="Comma-separated trustee identity hashes")
+@click.option("--threshold", "-n", type=int, required=True, help="Number of trustees required for recovery")
+def identity_set_recovery(trustees: str, threshold: int):
+    """Set recovery trustees."""
+    storage = get_storage()
+    ident = get_default_identity(storage)
+
+    if not ident:
+        click.echo("No default identity. Create one with: distriblog identity create")
+        return
+
+    trustee_list = [t.strip() for t in trustees.split(",")]
+
+    if threshold > len(trustee_list):
+        click.echo("Threshold cannot be greater than number of trustees")
+        return
+
+    if threshold < 1:
+        click.echo("Threshold must be at least 1")
+        return
+
+    event = ident.set_recovery(
+        primary_trustees=trustee_list,
+        primary_threshold=threshold,
+    )
+
+    storage.save_sigchain(ident.sigchain)
+    storage.close()
+
+    click.echo(f"Set recovery: {threshold} of {len(trustee_list)} trustees")
+
+
+@identity.command("export")
+@click.argument("output_file", type=click.Path())
+def identity_export(output_file: str):
+    """Export identity sigchain to file."""
+    storage = get_storage()
+    ident = get_default_identity(storage)
+
+    if not ident:
+        click.echo("No default identity. Create one with: distriblog identity create")
+        return
+
+    storage.close()
+
+    with open(output_file, "w") as f:
+        f.write(ident.sigchain.to_json())
+
+    click.echo(f"Exported sigchain to {output_file}")
+
+
+@identity.command("import")
+@click.argument("input_file", type=click.Path(exists=True))
+def identity_import(input_file: str):
+    """Import identity sigchain from file."""
+    from distriblog.core.identity import Sigchain
+
+    storage = get_storage()
+
+    with open(input_file, "r") as f:
+        sigchain = Sigchain.from_json(f.read())
+
+    # Verify sigchain
+    valid, error = sigchain.verify()
+    if not valid:
+        click.echo(f"Invalid sigchain: {error}")
+        return
+
+    storage.save_sigchain(sigchain)
+    storage.close()
+
+    click.echo(f"Imported sigchain: {sigchain.identity_hash}")
+
+
+# Trust commands
+
+
+@cli.group()
+def trust():
+    """Trust management commands."""
+    pass
+
+
+@trust.command("assert")
+@click.argument("identity_hash")
+@click.option("--name", "-n", help="Claimed name for the identity")
+@click.option("--confidence", "-c", type=float, default=0.8, help="Confidence level (-1.0 to 1.0)")
+@click.option("--verification", "-v", type=click.Choice(["in_person", "video", "vouched", "social_proof", "claimed"]), default="claimed")
+@click.option("--note", help="Optional note")
+def trust_assert(identity_hash: str, name: str | None, confidence: float, verification: str, note: str | None):
+    """Assert identity of someone."""
+    storage = get_storage()
+    ident = get_default_identity(storage)
+
+    if not ident:
+        click.echo("No default identity. Create one first.")
+        return
+
+    assertion = IdentityAssertion.create(
+        keypair=ident.local_keypair,
+        asserter_identity=ident.identity_hash,
+        subject=identity_hash,
+        claimed_name=name,
+        verification=VerificationLevel(verification),
+        confidence=confidence,
+        note=note,
+    )
+
+    storage.save_trust_assertion(
+        asserter_identity=assertion.asserter,
+        subject_identity=assertion.subject,
+        confidence=assertion.confidence,
+        timestamp=assertion.timestamp,
+        signature=assertion.signature,
+        claimed_name=assertion.claimed_name,
+        verification=assertion.verification.value,
+        note=assertion.note,
+    )
+    storage.close()
+
+    click.echo(f"Asserted: {identity_hash[:16]}... is {name or '(unnamed)'}")
+    click.echo(f"Confidence: {confidence}, Verification: {verification}")
+
+
+@trust.command("delegate")
+@click.argument("identity_hash")
+@click.option("--weight", "-w", type=float, default=0.5, help="Trust weight (0.0 to 1.0)")
+@click.option("--depth", "-d", type=int, help="Maximum delegation depth")
+def trust_delegate(identity_hash: str, weight: float, depth: int | None):
+    """Delegate trust to someone."""
+    import time
+
+    storage = get_storage()
+    ident = get_default_identity(storage)
+
+    if not ident:
+        click.echo("No default identity. Create one first.")
+        return
+
+    storage.save_trust_delegation(
+        from_identity=ident.identity_hash,
+        to_identity=identity_hash,
+        weight=weight,
+        timestamp=int(time.time()),
+        depth_limit=depth,
+    )
+    storage.close()
+
+    click.echo(f"Delegated trust to {identity_hash[:16]}... with weight {weight}")
+
+
+@trust.command("show")
+@click.argument("identity_hash")
+def trust_show(identity_hash: str):
+    """Show trust information for an identity."""
+    storage = get_storage()
+    ident = get_default_identity(storage)
+
+    if not ident:
+        click.echo("No default identity.")
+        return
+
+    # Get assertions about this identity
+    assertions = storage.get_trust_assertions(identity_hash)
+
+    # Get delegations from us
+    delegations = storage.get_trust_delegations(ident.identity_hash)
+
+    storage.close()
+
+    click.echo(f"Trust info for: {identity_hash[:16]}...")
+
+    if assertions:
+        click.echo("\nAssertions:")
+        for a in assertions:
+            name = a.get("claimed_name") or "(unnamed)"
+            conf = a["confidence"]
+            verif = a["verification"]
+            click.echo(f"  {a['asserter_identity'][:12]}... says: {name} (conf={conf}, verif={verif})")
+
+    my_delegation = None
+    for d in delegations:
+        if d["to_identity"] == identity_hash:
+            my_delegation = d
+            break
+
+    if my_delegation:
+        click.echo(f"\nYour delegation: weight={my_delegation['weight']}")
+    else:
+        click.echo("\nNo delegation from you")
+
+
+# Message commands
+
+
+@cli.group()
+def message():
+    """Message commands."""
+    pass
+
+
+@message.command("send")
+@click.argument("recipient")
+@click.option("--text", "-t", help="Text message to send")
+@click.option("--file", "-f", "file_path", type=click.Path(exists=True), help="File to send")
+def message_send(recipient: str, text: str | None, file_path: str | None):
+    """Send a message."""
+    from distriblog.content.mime import Content, MultipartContent
+
+    if not text and not file_path:
+        click.echo("Provide --text or --file")
+        return
+
+    storage = get_storage()
+    ident = get_default_identity(storage)
+
+    if not ident:
+        click.echo("No default identity. Create one first.")
+        return
+
+    # Build content
+    if text and file_path:
+        mp = MultipartContent.mixed()
+        mp.add_text(text)
+        mp.add_file(file_path)
+        content = mp.to_dict()
+    elif text:
+        content = create_text_message(text)
+    else:
+        content = Content.from_file(file_path).to_dict()
+
+    # For now, just show what would be sent
+    # Actual sending requires daemon
+    click.echo(f"Would send to: {recipient}")
+    click.echo(f"Content: {json.dumps(content, indent=2)[:200]}...")
+    click.echo("\nNote: Start daemon to actually send messages")
+
+
+@message.command("list")
+@click.option("--limit", "-n", type=int, default=20, help="Number of messages to show")
+def message_list(limit: int):
+    """List messages."""
+    storage = get_storage()
+    ident = get_default_identity(storage)
+
+    if not ident:
+        click.echo("No default identity.")
+        return
+
+    messages = storage.list_messages(identity_hash=ident.identity_hash, limit=limit)
+    storage.close()
+
+    if not messages:
+        click.echo("No messages")
+        return
+
+    for msg in messages:
+        direction = "→" if msg["sender_identity"] == ident.identity_hash else "←"
+        other = msg["recipient_identity"] if direction == "→" else msg["sender_identity"]
+        other_short = (other or "broadcast")[:12]
+        click.echo(f"{direction} {other_short}... [{msg['message_type']}] {msg['status']}")
+
+
+# Daemon commands
+
+
+@cli.group()
+def daemon():
+    """Daemon commands."""
+    pass
+
+
+@daemon.command("start")
+@click.option("--port", "-p", type=int, default=4556, help="Port to listen on")
+@click.option("--foreground", "-f", is_flag=True, help="Run in foreground")
+def daemon_start(port: int, foreground: bool):
+    """Start the relay daemon."""
+    import asyncio
+    from distriblog.daemon.server import run_daemon
+
+    storage = get_storage()
+    ident = get_default_identity(storage)
+
+    if not ident:
+        click.echo("No default identity. Create one first.")
+        return
+
+    click.echo(f"Starting daemon on port {port}...")
+    click.echo(f"Identity: {ident.identity_hash}")
+
+    try:
+        asyncio.run(run_daemon(
+            identity=ident,
+            storage=storage,
+            port=port,
+        ))
+    except KeyboardInterrupt:
+        click.echo("\nStopping daemon...")
+
+
+@daemon.command("status")
+def daemon_status():
+    """Check daemon status."""
+    # TODO: Implement proper status check
+    click.echo("Daemon status check not implemented yet")
+    click.echo("Try: distriblog daemon start --foreground")
+
+
+# API commands
+
+
+@cli.group()
+def api():
+    """API server commands."""
+    pass
+
+
+@api.command("start")
+@click.option("--host", "-h", default="127.0.0.1", help="Host to bind to")
+@click.option("--port", "-p", type=int, default=4557, help="Port to listen on")
+@click.option("--public", is_flag=True, help="Bind to 0.0.0.0 (public access)")
+@click.option("--db-path", type=click.Path(), help="Path to database file")
+@click.option("--web-root", type=click.Path(exists=True), help="Path to web client files")
+def api_start(host: str, port: int, public: bool, db_path: str | None, web_root: str | None):
+    """Start the REST API server."""
+    import asyncio
+    import logging
+    from distriblog.api.app import run_api_server
+
+    # Configure logging
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s %(levelname)s %(name)s: %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    )
+
+    if public:
+        host = "0.0.0.0"
+        click.echo("WARNING: Binding to 0.0.0.0 - API will be publicly accessible")
+
+    click.echo(f"Starting API server on http://{host}:{port}")
+    if web_root:
+        click.echo(f"Serving web client from {web_root}")
+    click.echo("Endpoints:")
+    click.echo("  GET  /health               - Health check")
+    click.echo("  POST /identities           - Create identity")
+    click.echo("  GET  /identities           - List identities")
+    click.echo("  GET  /identities/{hash}    - Get identity")
+    click.echo("  POST /identities/{hash}/events - Submit event")
+    click.echo("  POST /session              - Create session")
+    click.echo("  GET  /trust/calculate/{hash} - Calculate trust")
+    click.echo("  POST /verify               - Verify sigchain")
+    click.echo("")
+
+    try:
+        asyncio.run(run_api_server(host=host, port=port, db_path=db_path, web_root=web_root))
+    except KeyboardInterrupt:
+        click.echo("\nStopping API server...")
+
+
+@api.command("docs")
+def api_docs():
+    """Show API documentation."""
+    docs = """
+Distriblog REST API
+===================
+
+IDENTITY ENDPOINTS
+------------------
+
+POST /identities
+  Create identity with signed genesis event
+  Body: {"event": {genesis event}}
+
+GET /identities
+  List known identities
+
+GET /identities/{hash}
+  Get identity details
+
+GET /identities/{hash}/sigchain
+  Get full sigchain
+
+POST /identities/{hash}/events
+  Submit a signed event
+  Body: {"event": {signed event}}
+
+GET /identities/{hash}/devices
+  List active devices
+
+SESSION ENDPOINTS
+-----------------
+
+POST /session
+  Create session (requires signed request)
+  Body: {"identity": "...", "device_pubkey": "...", "timestamp": ..., "signature": "..."}
+
+GET /session
+  Check session status (requires Bearer token)
+
+DELETE /session
+  Invalidate session
+
+RECOVERY ENDPOINTS
+------------------
+
+POST /identities/{hash}/recovery/initiate
+  Start recovery process
+  Body: {"new_pubkey": "...", "new_encryption_pubkey": "...", "initiated_by": "..."}
+
+POST /identities/{hash}/recovery/{id}/sign
+  Submit trustee signature
+  Body: {"trustee_identity": "...", "signature": "..."}
+
+GET /identities/{hash}/recovery/{id}
+  Check recovery status
+
+GET /identities/{hash}/recovery/pending
+  List pending recoveries
+
+TRUST ENDPOINTS
+---------------
+
+POST /trust/assertions
+  Create trust assertion (requires signature in body)
+  Body: {"assertion": {signed assertion}}
+
+GET /trust/assertions?subject={hash}
+  Get assertions about an identity
+
+POST /trust/delegations
+  Create trust delegation (requires Bearer token)
+  Body: {"delegation": {...}}
+
+GET /trust/delegations?from={hash}
+  Get delegations from an identity
+
+GET /trust/calculate/{hash}
+  Calculate transitive trust (requires Bearer token)
+
+QUERY ENDPOINTS
+---------------
+
+POST /verify
+  Verify a sigchain
+  Body: {"sigchain": [events]}
+
+GET /lookup/{hash}
+  Lookup identity
+"""
+    click.echo(docs)
+
+
+# Group commands
+
+
+@cli.group()
+def group():
+    """Group commands."""
+    pass
+
+
+@group.command("create")
+@click.option("--name", "-n", required=True, help="Group name")
+def group_create(name: str):
+    """Create a new group."""
+    from distriblog.messaging.group import GroupCreateEvent, Group
+
+    storage = get_storage()
+    ident = get_default_identity(storage)
+
+    if not ident:
+        click.echo("No default identity. Create one first.")
+        return
+
+    event = GroupCreateEvent.create(
+        keypair=ident.local_keypair,
+        creator_identity=ident.identity_hash,
+        name=name,
+    )
+
+    grp = Group(events=[event])
+
+    # Save group
+    storage.close()  # TODO: implement group storage
+
+    click.echo(f"Created group: {event.group_id}")
+    click.echo(f"Name: {name}")
+
+
+if __name__ == "__main__":
+    cli()

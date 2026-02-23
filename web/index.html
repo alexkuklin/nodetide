@@ -1,0 +1,878 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#1a1a2e">
+  <title>Distriblog</title>
+  <link rel="manifest" href="/manifest.json">
+
+  <!-- Alpine.js -->
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+
+  <!-- TweetNaCl -->
+  <script src="https://cdn.jsdelivr.net/npm/tweetnacl@1.0.3/nacl-fast.min.js"></script>
+
+  <!-- QR Code libraries -->
+  <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
+
+  <!-- App -->
+  <script src="/js/app.js"></script>
+
+  <style>
+    :root {
+      --bg-primary: #1a1a2e;
+      --bg-secondary: #16213e;
+      --bg-tertiary: #0f3460;
+      --text-primary: #eaeaea;
+      --text-secondary: #a0a0a0;
+      --accent: #e94560;
+      --accent-hover: #ff6b6b;
+      --success: #4ecca3;
+      --warning: #ffc107;
+      --error: #ff4757;
+      --border: #2a2a4a;
+      --shadow: rgba(0, 0, 0, 0.3);
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--bg-primary);
+      color: var(--text-primary);
+      min-height: 100vh;
+      line-height: 1.5;
+    }
+
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 1rem;
+    }
+
+    /* Header */
+    header {
+      background: var(--bg-secondary);
+      border-bottom: 1px solid var(--border);
+      padding: 1rem;
+    }
+
+    header h1 {
+      font-size: 1.5rem;
+      font-weight: 600;
+    }
+
+    /* Navigation */
+    nav {
+      background: var(--bg-secondary);
+      border-bottom: 1px solid var(--border);
+      padding: 0.5rem 1rem;
+      display: flex;
+      gap: 0.5rem;
+      overflow-x: auto;
+    }
+
+    nav button {
+      background: transparent;
+      border: none;
+      color: var(--text-secondary);
+      padding: 0.5rem 1rem;
+      border-radius: 0.25rem;
+      cursor: pointer;
+      white-space: nowrap;
+      font-size: 0.9rem;
+    }
+
+    nav button:hover {
+      background: var(--bg-tertiary);
+      color: var(--text-primary);
+    }
+
+    nav button.active {
+      background: var(--accent);
+      color: white;
+    }
+
+    /* Cards */
+    .card {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      border-radius: 0.5rem;
+      padding: 1rem;
+      margin-bottom: 1rem;
+    }
+
+    .card-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 1rem;
+      padding-bottom: 0.5rem;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .card-title {
+      font-size: 1.1rem;
+      font-weight: 600;
+    }
+
+    /* Buttons */
+    .btn {
+      background: var(--accent);
+      color: white;
+      border: none;
+      padding: 0.5rem 1rem;
+      border-radius: 0.25rem;
+      cursor: pointer;
+      font-size: 0.9rem;
+      transition: background 0.2s;
+    }
+
+    .btn:hover:not(:disabled) {
+      background: var(--accent-hover);
+    }
+
+    .btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    .btn-secondary {
+      background: var(--bg-tertiary);
+    }
+
+    .btn-secondary:hover:not(:disabled) {
+      background: var(--border);
+    }
+
+    .btn-danger {
+      background: var(--error);
+    }
+
+    .btn-small {
+      padding: 0.25rem 0.5rem;
+      font-size: 0.8rem;
+    }
+
+    /* Inputs */
+    .form-group {
+      margin-bottom: 1rem;
+    }
+
+    .form-group label {
+      display: block;
+      margin-bottom: 0.25rem;
+      font-size: 0.9rem;
+      color: var(--text-secondary);
+    }
+
+    input, select, textarea {
+      width: 100%;
+      padding: 0.5rem;
+      background: var(--bg-primary);
+      border: 1px solid var(--border);
+      border-radius: 0.25rem;
+      color: var(--text-primary);
+      font-size: 0.9rem;
+    }
+
+    input:focus, select:focus, textarea:focus {
+      outline: none;
+      border-color: var(--accent);
+    }
+
+    /* Modal */
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.7);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 100;
+    }
+
+    .modal {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      border-radius: 0.5rem;
+      padding: 1.5rem;
+      width: 90%;
+      max-width: 400px;
+      max-height: 90vh;
+      overflow-y: auto;
+    }
+
+    .modal-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 1rem;
+    }
+
+    .modal-title {
+      font-size: 1.2rem;
+      font-weight: 600;
+    }
+
+    .modal-close {
+      background: none;
+      border: none;
+      color: var(--text-secondary);
+      cursor: pointer;
+      font-size: 1.5rem;
+      line-height: 1;
+    }
+
+    /* Alerts */
+    .alert {
+      padding: 0.75rem 1rem;
+      border-radius: 0.25rem;
+      margin-bottom: 1rem;
+    }
+
+    .alert-error {
+      background: rgba(255, 71, 87, 0.2);
+      border: 1px solid var(--error);
+      color: var(--error);
+    }
+
+    .alert-success {
+      background: rgba(78, 204, 163, 0.2);
+      border: 1px solid var(--success);
+      color: var(--success);
+    }
+
+    /* Identity list */
+    .identity-item {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      padding: 0.75rem;
+      background: var(--bg-primary);
+      border-radius: 0.25rem;
+      margin-bottom: 0.5rem;
+    }
+
+    .identity-avatar {
+      width: 40px;
+      height: 40px;
+      background: var(--accent);
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: bold;
+      font-size: 1.2rem;
+    }
+
+    .identity-info {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .identity-name {
+      font-weight: 500;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .identity-hash {
+      font-size: 0.8rem;
+      color: var(--text-secondary);
+      font-family: monospace;
+    }
+
+    .identity-actions {
+      display: flex;
+      gap: 0.5rem;
+    }
+
+    /* Status indicators */
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      display: inline-block;
+      margin-right: 0.25rem;
+    }
+
+    .status-online {
+      background: var(--success);
+    }
+
+    .status-offline {
+      background: var(--text-secondary);
+    }
+
+    .status-locked {
+      background: var(--warning);
+    }
+
+    .status-unlocked {
+      background: var(--success);
+    }
+
+    /* Badge */
+    .badge {
+      display: inline-block;
+      padding: 0.125rem 0.5rem;
+      font-size: 0.75rem;
+      border-radius: 1rem;
+      background: var(--bg-tertiary);
+      color: var(--text-secondary);
+    }
+
+    .badge-active {
+      background: var(--accent);
+      color: white;
+    }
+
+    /* Sigchain events */
+    .event-item {
+      padding: 0.75rem;
+      background: var(--bg-primary);
+      border-radius: 0.25rem;
+      margin-bottom: 0.5rem;
+      border-left: 3px solid var(--accent);
+    }
+
+    .event-type {
+      font-weight: 500;
+      color: var(--accent);
+      font-size: 0.9rem;
+    }
+
+    .event-time {
+      font-size: 0.75rem;
+      color: var(--text-secondary);
+    }
+
+    /* Radio/Checkbox group */
+    .radio-group {
+      display: flex;
+      gap: 1rem;
+      margin-top: 0.5rem;
+    }
+
+    .radio-group label {
+      display: flex;
+      align-items: center;
+      gap: 0.25rem;
+      cursor: pointer;
+    }
+
+    /* Grid */
+    .grid {
+      display: grid;
+      gap: 1rem;
+    }
+
+    .grid-2 {
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    }
+
+    /* Slider */
+    input[type="range"] {
+      -webkit-appearance: none;
+      height: 4px;
+      background: var(--border);
+      border-radius: 2px;
+    }
+
+    input[type="range"]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 16px;
+      height: 16px;
+      background: var(--accent);
+      border-radius: 50%;
+      cursor: pointer;
+    }
+
+    /* Utility */
+    .text-center { text-align: center; }
+    .text-muted { color: var(--text-secondary); }
+    .text-small { font-size: 0.85rem; }
+    .mt-1 { margin-top: 1rem; }
+    .mb-1 { margin-bottom: 1rem; }
+    .flex { display: flex; }
+    .flex-between { justify-content: space-between; }
+    .gap-1 { gap: 1rem; }
+
+    /* Offline indicator */
+    .offline-banner {
+      background: var(--warning);
+      color: black;
+      text-align: center;
+      padding: 0.5rem;
+      font-size: 0.9rem;
+    }
+  </style>
+</head>
+<body x-data x-init="$store.app.init()">
+
+  <!-- Offline banner -->
+  <div class="offline-banner" x-show="!$store.app.online" x-cloak>
+    You are offline. Some features may be unavailable.
+  </div>
+
+  <!-- Header -->
+  <header>
+    <div class="container flex flex-between">
+      <h1>Distriblog</h1>
+      <div x-data="identityManager">
+        <span class="text-small text-muted" x-show="activeIdentity">
+          <span class="status-dot" :class="isUnlocked(activeIdentity?.identityHash) ? 'status-unlocked' : 'status-locked'"></span>
+          <span x-text="activeIdentity?.name || truncateHash(activeIdentity?.identityHash)"></span>
+        </span>
+      </div>
+    </div>
+  </header>
+
+  <!-- Navigation -->
+  <nav>
+    <button @click="$store.app.setView('identities')"
+            :class="{ active: $store.app.currentView === 'identities' }">
+      Identities
+    </button>
+    <button @click="$store.app.setView('identity')"
+            :class="{ active: $store.app.currentView === 'identity' }">
+      My Identity
+    </button>
+    <button @click="$store.app.setView('trust')"
+            :class="{ active: $store.app.currentView === 'trust' }">
+      Trust
+    </button>
+    <button @click="$store.app.setView('settings')"
+            :class="{ active: $store.app.currentView === 'settings' }">
+      Settings
+    </button>
+  </nav>
+
+  <!-- Main content -->
+  <main class="container">
+    <!-- Alerts -->
+    <div class="alert alert-error" x-show="$store.app.error" x-text="$store.app.error" x-cloak></div>
+    <div class="alert alert-success" x-show="$store.app.success" x-text="$store.app.success" x-cloak></div>
+
+    <!-- Identities view -->
+    <div x-show="$store.app.currentView === 'identities'" x-data="identityManager" x-cloak>
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">Your Identities</span>
+          <button class="btn" @click="showCreateModal = true">Create New</button>
+        </div>
+
+        <template x-if="identities.length === 0">
+          <p class="text-muted text-center">No identities yet. Create one to get started.</p>
+        </template>
+
+        <template x-for="identity in identities" :key="identity.identityHash">
+          <div class="identity-item">
+            <div class="identity-avatar" x-text="(identity.name || '?')[0].toUpperCase()"></div>
+            <div class="identity-info">
+              <div class="identity-name">
+                <span x-text="identity.name || 'Unnamed'"></span>
+                <span class="badge" x-show="activeIdentity?.identityHash === identity.identityHash">Active</span>
+                <span class="badge" x-show="isUnlocked(identity.identityHash)" style="background: var(--success)">Unlocked</span>
+              </div>
+              <div class="identity-hash" x-text="truncateHash(identity.identityHash)"></div>
+              <div class="text-small text-muted">
+                <span x-text="identity.storageMethod === 'webauthn' ? 'Passkey' : 'Password'"></span>
+                &bull; Created <span x-text="formatDate(identity.createdAt)"></span>
+              </div>
+            </div>
+            <div class="identity-actions">
+              <template x-if="!isUnlocked(identity.identityHash)">
+                <button class="btn btn-small" @click="openUnlock(identity)">Unlock</button>
+              </template>
+              <template x-if="isUnlocked(identity.identityHash)">
+                <button class="btn btn-small btn-secondary" @click="lockIdentity(identity.identityHash)">Lock</button>
+              </template>
+              <button class="btn btn-small btn-secondary"
+                      @click="setActive(identity.identityHash)"
+                      x-show="activeIdentity?.identityHash !== identity.identityHash">
+                Set Active
+              </button>
+              <button class="btn btn-small btn-danger" @click="deleteIdentity(identity.identityHash)">Delete</button>
+            </div>
+          </div>
+        </template>
+      </div>
+
+      <!-- Create Modal -->
+      <div class="modal-backdrop" x-show="showCreateModal" x-cloak @click.self="showCreateModal = false">
+        <div class="modal">
+          <div class="modal-header">
+            <span class="modal-title">Create Identity</span>
+            <button class="modal-close" @click="showCreateModal = false">&times;</button>
+          </div>
+
+          <form @submit.prevent="createIdentity">
+            <div class="form-group">
+              <label>Name (optional)</label>
+              <input type="text" x-model="createForm.name" placeholder="Your name or alias">
+            </div>
+
+            <div class="form-group">
+              <label>Storage Method</label>
+              <div class="radio-group">
+                <label>
+                  <input type="radio" value="password" x-model="createForm.method">
+                  Password
+                </label>
+                <label :class="{ 'text-muted': !webauthnSupported }">
+                  <input type="radio" value="webauthn" x-model="createForm.method" :disabled="!webauthnSupported">
+                  Passkey
+                  <template x-if="!webauthnSupported">
+                    <span class="text-small">(not supported)</span>
+                  </template>
+                </label>
+              </div>
+            </div>
+
+            <template x-if="createForm.method === 'password'">
+              <div>
+                <div class="form-group">
+                  <label>Password</label>
+                  <input type="password" x-model="createForm.password" placeholder="At least 8 characters">
+                </div>
+                <div class="form-group">
+                  <label>Confirm Password</label>
+                  <input type="password" x-model="createForm.confirmPassword" placeholder="Repeat password">
+                </div>
+              </div>
+            </template>
+
+            <button type="submit" class="btn" style="width: 100%" :disabled="$store.app.loading">
+              <span x-show="!$store.app.loading">Create Identity</span>
+              <span x-show="$store.app.loading">Creating...</span>
+            </button>
+          </form>
+        </div>
+      </div>
+
+      <!-- Unlock Modal -->
+      <div class="modal-backdrop" x-show="showUnlockModal" x-cloak @click.self="showUnlockModal = false">
+        <div class="modal">
+          <div class="modal-header">
+            <span class="modal-title">Unlock Identity</span>
+            <button class="modal-close" @click="showUnlockModal = false">&times;</button>
+          </div>
+
+          <div class="text-center mb-1">
+            <div class="identity-avatar" style="margin: 0 auto" x-text="(unlockingIdentity?.name || '?')[0].toUpperCase()"></div>
+            <div class="mt-1" x-text="unlockingIdentity?.name || 'Unnamed'"></div>
+            <div class="identity-hash" x-text="truncateHash(unlockingIdentity?.identityHash)"></div>
+          </div>
+
+          <form @submit.prevent="unlockIdentity">
+            <template x-if="unlockingIdentity?.storageMethod === 'password'">
+              <div class="form-group">
+                <label>Password</label>
+                <input type="password" x-model="unlockPassword" placeholder="Enter your password">
+              </div>
+            </template>
+
+            <template x-if="unlockingIdentity?.storageMethod === 'webauthn'">
+              <p class="text-center text-muted mb-1">Click below to authenticate with your passkey.</p>
+            </template>
+
+            <button type="submit" class="btn" style="width: 100%" :disabled="$store.app.loading">
+              <span x-show="!$store.app.loading" x-text="unlockingIdentity?.storageMethod === 'webauthn' ? 'Authenticate' : 'Unlock'"></span>
+              <span x-show="$store.app.loading">Unlocking...</span>
+            </button>
+          </form>
+        </div>
+      </div>
+    </div>
+
+    <!-- Identity detail view -->
+    <div x-show="$store.app.currentView === 'identity'" x-data="identityDetail" x-cloak>
+      <template x-if="!identity">
+        <div class="card text-center">
+          <p class="text-muted">No active identity. Select one from the Identities tab.</p>
+        </div>
+      </template>
+
+      <template x-if="identity">
+        <div class="grid grid-2">
+          <div class="card">
+            <div class="card-header">
+              <span class="card-title">Identity Info</span>
+            </div>
+            <div class="form-group">
+              <label>Name</label>
+              <div x-text="identity.name || 'Unnamed'"></div>
+            </div>
+            <div class="form-group">
+              <label>Identity Hash</label>
+              <div class="identity-hash" style="word-break: break-all" x-text="identity.identityHash"></div>
+            </div>
+            <div class="form-group">
+              <label>Signing Public Key</label>
+              <div class="identity-hash" style="word-break: break-all" x-text="identity.signingPubkey"></div>
+            </div>
+            <div class="form-group">
+              <label>Created</label>
+              <div x-text="new Date(identity.createdAt).toLocaleString()"></div>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-header">
+              <span class="card-title">Share Identity</span>
+            </div>
+            <div x-data="qrManager" x-init="showIdentityQR(identity?.identityHash)">
+              <div class="text-center mb-1">
+                <div x-ref="qrContainer" style="display: inline-block; background: white; padding: 1rem; border-radius: 0.5rem;"></div>
+              </div>
+              <p class="text-small text-muted text-center">
+                Scan this QR code to share your identity with others.
+              </p>
+              <div class="flex gap-1 mt-1" style="justify-content: center">
+                <button class="btn btn-small btn-secondary" @click="copyIdentityHash">Copy Hash</button>
+                <button class="btn btn-small btn-secondary" @click="startScan" x-show="!scanning">Scan QR</button>
+                <button class="btn btn-small btn-danger" @click="stopScan" x-show="scanning">Stop Scan</button>
+              </div>
+              <div x-ref="scanContainer" x-show="scanning" class="mt-1 text-center"></div>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-header">
+              <span class="card-title">Recovery</span>
+            </div>
+            <template x-if="!recovery">
+              <p class="text-muted">No recovery trustees configured.</p>
+            </template>
+            <template x-if="recovery">
+              <div>
+                <div class="form-group">
+                  <label>Threshold</label>
+                  <div x-text="recovery.threshold + ' of ' + recovery.trustees.length + ' trustees'"></div>
+                </div>
+                <div class="form-group">
+                  <label>Trustees</label>
+                  <template x-for="trustee in recovery.trustees">
+                    <div class="identity-hash" x-text="trustee"></div>
+                  </template>
+                </div>
+              </div>
+            </template>
+          </div>
+
+          <div class="card">
+            <div class="card-header">
+              <span class="card-title">Devices (<span x-text="activeDevices.length"></span>)</span>
+            </div>
+            <template x-if="activeDevices.length === 0">
+              <p class="text-muted">No additional devices.</p>
+            </template>
+            <template x-for="device in activeDevices">
+              <div class="identity-item">
+                <div class="identity-info">
+                  <div class="identity-name" x-text="device.label || 'Unnamed Device'"></div>
+                  <div class="identity-hash" x-text="device.pubkey.slice(0, 16) + '...'"></div>
+                  <div class="text-small">
+                    <template x-for="cap in device.capabilities">
+                      <span class="badge" x-text="cap" style="margin-right: 0.25rem"></span>
+                    </template>
+                  </div>
+                </div>
+              </div>
+            </template>
+          </div>
+
+          <div class="card">
+            <div class="card-header">
+              <span class="card-title">Sigchain (<span x-text="sigchain.length"></span> events)</span>
+            </div>
+            <template x-if="sigchain.length === 0">
+              <p class="text-muted" x-show="!loading">Sigchain not synced yet.</p>
+            </template>
+            <template x-for="event in sigchain.slice().reverse().slice(0, 10)">
+              <div class="event-item">
+                <div class="event-type" x-text="event.type"></div>
+                <div class="event-time" x-text="new Date(event.timestamp * 1000).toLocaleString()"></div>
+              </div>
+            </template>
+            <template x-if="sigchain.length > 10">
+              <p class="text-muted text-small text-center">... and <span x-text="sigchain.length - 10"></span> more events</p>
+            </template>
+          </div>
+        </div>
+      </template>
+    </div>
+
+    <!-- Trust view -->
+    <div x-show="$store.app.currentView === 'trust'" x-data="trustManager" x-cloak>
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">Trust Management</span>
+        </div>
+
+        <div class="form-group">
+          <label>Target Identity Hash</label>
+          <div class="flex gap-1">
+            <input type="text" x-model="targetIdentity" placeholder="Enter identity hash">
+            <button class="btn" @click="lookup" :disabled="loading">Lookup</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="grid grid-2" x-show="targetIdentity">
+        <div class="card">
+          <div class="card-header">
+            <span class="card-title">Assert Identity</span>
+          </div>
+          <div class="form-group">
+            <label>Name</label>
+            <input type="text" x-model="assertForm.name" placeholder="What is this identity's name?">
+          </div>
+          <div class="form-group">
+            <label>Confidence: <span x-text="assertForm.confidence"></span></label>
+            <input type="range" min="-1" max="1" step="0.1" x-model.number="assertForm.confidence">
+          </div>
+          <button class="btn" @click="assertName" :disabled="loading">Create Assertion</button>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <span class="card-title">Delegate Trust</span>
+          </div>
+          <div class="form-group">
+            <label>Weight: <span x-text="delegateForm.weight"></span></label>
+            <input type="range" min="0" max="1" step="0.1" x-model.number="delegateForm.weight">
+          </div>
+          <div class="form-group">
+            <label>Scope</label>
+            <select x-model="delegateForm.scope">
+              <option value="identity">Identity Assertions</option>
+              <option value="content">Content Trust</option>
+              <option value="all">All</option>
+            </select>
+          </div>
+          <button class="btn" @click="delegate" :disabled="loading">Create Delegation</button>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <span class="card-title">Identity Assertions</span>
+          </div>
+          <template x-if="assertions.length === 0">
+            <p class="text-muted">No assertions found.</p>
+          </template>
+          <template x-for="a in assertions">
+            <div class="identity-item">
+              <div class="identity-info">
+                <div class="identity-name" x-text="a.name"></div>
+                <div class="text-small">
+                  Confidence: <span x-text="a.confidence"></span>
+                  &bull; By: <span class="identity-hash" x-text="a.asserter?.slice(0, 8) + '...'"></span>
+                </div>
+              </div>
+            </div>
+          </template>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <span class="card-title">Trust Delegations</span>
+          </div>
+          <template x-if="delegations.length === 0">
+            <p class="text-muted">No delegations found.</p>
+          </template>
+          <template x-for="d in delegations">
+            <div class="identity-item">
+              <div class="identity-info">
+                <div>Weight: <span x-text="d.weight"></span></div>
+                <div class="text-small">
+                  Scope: <span x-text="d.scope"></span>
+                  &bull; From: <span class="identity-hash" x-text="d.from?.slice(0, 8) + '...'"></span>
+                </div>
+              </div>
+            </div>
+          </template>
+        </div>
+      </div>
+    </div>
+
+    <!-- Settings view -->
+    <div x-show="$store.app.currentView === 'settings'" x-data="settingsManager" x-cloak>
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">Settings</span>
+        </div>
+
+        <div class="form-group">
+          <label>API URL</label>
+          <input type="text" x-model="apiUrl" placeholder="/api">
+        </div>
+
+        <div class="form-group">
+          <label>Auto-lock after (minutes)</label>
+          <input type="number" x-model.number="autoLock" min="0" max="60">
+        </div>
+
+        <button class="btn" @click="save">Save Settings</button>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">Data Management</span>
+        </div>
+
+        <p class="text-small text-muted mb-1">
+          Export your identities for backup. Password-protected identities will remain encrypted.
+          WebAuthn-protected identities cannot be exported with their keys.
+        </p>
+
+        <div class="flex gap-1">
+          <button class="btn btn-secondary" @click="exportData">Export Backup</button>
+          <label class="btn btn-secondary" style="cursor: pointer">
+            Import Backup
+            <input type="file" accept=".json" @change="importData" style="display: none">
+          </label>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">About</span>
+        </div>
+        <p class="text-small text-muted">
+          Distriblog - Distributed Identity System<br>
+          Version 0.1.0
+        </p>
+      </div>
+    </div>
+  </main>
+
+  <!-- Loading overlay -->
+  <div x-show="$store.app.loading"
+       style="position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 200"
+       x-cloak>
+    <div style="color: white; text-align: center">
+      <div style="font-size: 2rem; animation: spin 1s linear infinite">&#x21bb;</div>
+      <div>Loading...</div>
+    </div>
+  </div>
+
+  <style>
+    @keyframes spin {
+      from { transform: rotate(0deg); }
+      to { transform: rotate(360deg); }
+    }
+    [x-cloak] { display: none !important; }
+  </style>
+
+</body>
+</html>

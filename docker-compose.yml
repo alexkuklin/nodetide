@@ -1,0 +1,26 @@
+version: '3.8'
+
+services:
+  distriblog:
+    build: .
+    container_name: distriblog
+    ports:
+      - "4557:4557"
+    volumes:
+      - distriblog-data:/data
+    environment:
+      - DISTRIBLOG_HOST=0.0.0.0
+      - DISTRIBLOG_PORT=4557
+      - DISTRIBLOG_DB_PATH=/data/distriblog.db
+      - DISTRIBLOG_WEB_ROOT=/app/web
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:4557/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 5s
+
+volumes:
+  distriblog-data:
+    driver: local

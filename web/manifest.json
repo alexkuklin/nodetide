@@ -1,0 +1,31 @@
+{
+  "name": "Distriblog",
+  "short_name": "Distriblog",
+  "description": "Distributed Identity System",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#1a1a2e",
+  "theme_color": "#1a1a2e",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ],
+  "categories": ["utilities", "social"],
+  "shortcuts": [
+    {
+      "name": "My Identity",
+      "url": "/?view=identity",
+      "description": "View your identity"
+    },
+    {
+      "name": "Create Identity",
+      "url": "/?action=create",
+      "description": "Create a new identity"
+    }
+  ]
+}
