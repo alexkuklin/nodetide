@@ -1,0 +1,71 @@
+name: Deploy to VPS
+
+on:
+  workflow_run:
+    workflows: ["Build and Push Docker Image"]
+    types:
+      - completed
+    branches:
+      - main
+  workflow_dispatch:
+
+env:
+  AWS_REGION: us-east-1
+  ECR_REPOSITORY: distriblog
+  DEPLOY_HOST: mail.kuklin.eu
+  DEPLOY_USER: root
+  CONTAINER_NAME: distriblog
+  CONTAINER_PORT: 4557
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch' }}
+
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/distriblog-github-actions
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Get ECR registry
+        id: ecr
+        run: |
+          echo "registry=${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com" >> $GITHUB_OUTPUT
+
+      - name: Deploy to VPS
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ env.DEPLOY_HOST }}
+          username: ${{ env.DEPLOY_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          script: |
+            set -e
+
+            # Login to ECR
+            aws ecr get-login-password --region ${{ env.AWS_REGION }} | \
+              docker login --username AWS --password-stdin ${{ steps.ecr.outputs.registry }}
+
+            # Pull latest image
+            docker pull ${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:latest
+
+            # Stop and remove existing container (if exists)
+            docker stop ${{ env.CONTAINER_NAME }} 2>/dev/null || true
+            docker rm ${{ env.CONTAINER_NAME }} 2>/dev/null || true
+
+            # Run new container
+            docker run -d \
+              --name ${{ env.CONTAINER_NAME }} \
+              --restart unless-stopped \
+              -p ${{ env.CONTAINER_PORT }}:4557 \
+              -v distriblog-data:/data \
+              ${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:latest
+
+            # Cleanup old images
+            docker image prune -f
+
+            # Verify container is running
+            sleep 3
+            docker ps | grep ${{ env.CONTAINER_NAME }}
+            echo "Deployment successful!"
