@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
 
 env:
-  DEPLOY_HOST: mail.kuklin.eu
+  DEPLOY_HOST: dblog.kuklin.eu
   DEPLOY_USER: deploy-distriblog
 
 jobs:
