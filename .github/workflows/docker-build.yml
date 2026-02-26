@@ -26,12 +26,16 @@ jobs:
   build:
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         variant:
           - name: python
             dockerfile: python/Dockerfile
           - name: golang
             dockerfile: golang/Dockerfile
+    outputs:
+      python: ${{ steps.result.outputs.python }}
+      golang: ${{ steps.result.outputs.golang }}
 
     steps:
       - name: Checkout code
@@ -61,6 +65,7 @@ jobs:
             type=ref,event=pr,prefix=${{ matrix.variant.name }}-pr-
 
       - name: Build and push
+        id: build
         uses: docker/build-push-action@v5
         with:
           context: .
@@ -72,26 +77,42 @@ jobs:
           cache-to: type=gha,mode=max,scope=${{ matrix.variant.name }}
           platforms: linux/amd64,linux/arm64
 
+      - name: Set build result
+        id: result
+        if: always()
+        run: |
+          echo "${{ matrix.variant.name }}=${{ steps.build.outcome }}" >> $GITHUB_OUTPUT
+
       - name: Output image URI
-        if: github.event_name != 'pull_request'
+        if: steps.build.outcome == 'success' && github.event_name != 'pull_request'
         run: |
           echo "Image pushed: ${{ matrix.variant.name }}"
           echo "${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ matrix.variant.name }}-${{ github.sha }}"
 
-  deploy:
+  deploy-python:
     needs: build
-    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    if: always() && needs.build.outputs.python == 'success' && github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        variant: [python, golang]
-
     steps:
-      - name: Deploy ${{ matrix.variant }} to VPS
+      - name: Deploy python to VPS
         uses: appleboy/ssh-action@v1.0.3
         with:
-          host: ${{ matrix.variant }}.dblog.kuklin.eu
+          host: dblog.kuklin.eu
           username: deploy-distriblog
           key: ${{ secrets.VPS_SSH_KEY }}
           script: |
-            sudo /usr/local/bin/deploy-distriblog-wrapper.sh ${{ matrix.variant }}
+            sudo /usr/local/bin/deploy-distriblog-wrapper.sh python
+
+  deploy-golang:
+    needs: build
+    if: always() && needs.build.outputs.golang == 'success' && github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy golang to VPS
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: dblog.kuklin.eu
+          username: deploy-distriblog
+          key: ${{ secrets.VPS_SSH_KEY }}
+          script: |
+            sudo /usr/local/bin/deploy-distriblog-wrapper.sh golang
