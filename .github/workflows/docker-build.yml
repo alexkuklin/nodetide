@@ -1,4 +1,4 @@
-name: Build and Push Docker Image
+name: Build and Push Docker Images
 
 on:
   push:
@@ -25,6 +25,13 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        variant:
+          - name: python
+            dockerfile: python/Dockerfile
+          - name: golang
+            dockerfile: golang/Dockerfile
 
     steps:
       - name: Checkout code
@@ -49,24 +56,42 @@ jobs:
         with:
           images: ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}
           tags: |
-            type=ref,event=branch
-            type=ref,event=pr
-            type=sha,prefix=
-            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=${{ matrix.variant.name }}-latest,enable={{is_default_branch}}
+            type=raw,value=${{ matrix.variant.name }}-${{ github.sha }}
+            type=ref,event=pr,prefix=${{ matrix.variant.name }}-pr-
 
       - name: Build and push
         uses: docker/build-push-action@v5
         with:
           context: .
+          file: ${{ matrix.variant.dockerfile }}
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=${{ matrix.variant.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.variant.name }}
           platforms: linux/amd64,linux/arm64
 
       - name: Output image URI
         if: github.event_name != 'pull_request'
         run: |
-          echo "Image pushed to:"
-          echo "${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}"
+          echo "Image pushed: ${{ matrix.variant.name }}"
+          echo "${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ matrix.variant.name }}-${{ github.sha }}"
+
+  deploy:
+    needs: build
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        variant: [python, golang]
+
+    steps:
+      - name: Deploy ${{ matrix.variant }} to VPS
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ matrix.variant }}.dblog.kuklin.eu
+          username: deploy-distriblog
+          key: ${{ secrets.VPS_SSH_KEY }}
+          script: |
+            sudo /usr/local/bin/deploy-distriblog-wrapper.sh ${{ matrix.variant }}

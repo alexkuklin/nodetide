@@ -1,4 +1,4 @@
-# Distriblog Docker Image
+# Distriblog Python Docker Image
 # Multi-stage build for smaller final image
 
 # Build stage
@@ -13,9 +13,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy project files
-COPY pyproject.toml .
+COPY python/pyproject.toml .
 COPY README.md .
-COPY src/ src/
+COPY python/src/ src/
 
 # Build wheel
 RUN pip install --no-cache-dir build && \
