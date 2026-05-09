@@ -346,3 +346,80 @@ def symmetric_decrypt(ciphertext: bytes, key: bytes) -> bytes:
 
     box = SecretBox(key)
     return box.decrypt(ciphertext)
+
+
+def password_encrypt(plaintext: bytes, password: str) -> str:
+    """Encrypt data with a password using PBKDF2 + AES-256-GCM.
+
+    This format is compatible with the web client's Crypto.encryptWithPassword.
+
+    Returns hex-encoded string: salt (16 bytes) + iv (12 bytes) + ciphertext.
+    """
+    from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+    # Generate random salt and IV
+    salt = random_bytes(16)
+    iv = random_bytes(12)
+
+    # Derive key from password using PBKDF2 (same params as web client)
+    kdf = PBKDF2HMAC(
+        algorithm=hashes.SHA256(),
+        length=32,  # 256 bits for AES-256
+        salt=salt,
+        iterations=100000,
+    )
+    key = kdf.derive(password.encode("utf-8"))
+
+    # Encrypt with AES-GCM
+    aesgcm = AESGCM(key)
+    ciphertext = aesgcm.encrypt(iv, plaintext, None)
+
+    # Concatenate: salt + iv + ciphertext
+    result = salt + iv + ciphertext
+    return result.hex()
+
+
+def password_decrypt(encrypted_hex: str, password: str) -> bytes:
+    """Decrypt data encrypted with password_encrypt.
+
+    This format is compatible with the web client's Crypto.decryptWithPassword.
+
+    Args:
+        encrypted_hex: Hex string from password_encrypt (salt + iv + ciphertext)
+        password: The password used for encryption
+
+    Returns:
+        Decrypted plaintext bytes
+
+    Raises:
+        ValueError: If decryption fails (wrong password or corrupted data)
+    """
+    from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    from cryptography.exceptions import InvalidTag
+
+    data = bytes.fromhex(encrypted_hex)
+
+    # Extract salt, iv, ciphertext
+    salt = data[:16]
+    iv = data[16:28]
+    ciphertext = data[28:]
+
+    # Derive key from password using PBKDF2
+    kdf = PBKDF2HMAC(
+        algorithm=hashes.SHA256(),
+        length=32,
+        salt=salt,
+        iterations=100000,
+    )
+    key = kdf.derive(password.encode("utf-8"))
+
+    # Decrypt with AES-GCM
+    aesgcm = AESGCM(key)
+    try:
+        return aesgcm.decrypt(iv, ciphertext, None)
+    except InvalidTag as e:
+        raise ValueError("Decryption failed - wrong password or corrupted data") from e

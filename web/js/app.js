@@ -210,6 +210,109 @@
       identities.push(identity);
       localStorage.setItem(STORAGE_KEYS.IDENTITIES, JSON.stringify(identities));
     },
+
+    async dumpIdentity(identityHash, password) {
+      /**
+       * Create a portable dump of an identity with encrypted private keys.
+       * Format is compatible with CLI 'identity restore' command.
+       */
+      const identity = this.getIdentity(identityHash);
+      if (!identity) throw new Error('Identity not found');
+
+      // Get decrypted keys (need to unlock first)
+      const keyPair = SessionKeys.get(identityHash);
+      if (!keyPair) throw new Error('Identity must be unlocked to dump');
+
+      // Fetch sigchain from API
+      let sigchain = [];
+      try {
+        const response = await api.request('GET', `/identities/${identityHash}/sigchain`);
+        sigchain = response.events || [];
+      } catch (e) {
+        console.warn('Could not fetch sigchain from API, using empty:', e);
+      }
+
+      // Encrypt keys for dump (format compatible with CLI)
+      const keysJson = JSON.stringify({
+        signing_key: keyPair.signing.secretKey,
+        encryption_key: keyPair.encryption.secretKey,
+      });
+      const encryptedKeys = await Crypto.encryptWithPassword(keysJson, password);
+
+      // Create dump
+      return {
+        version: 1,
+        format: 'distriblog-identity-dump',
+        identity_hash: identityHash,
+        sigchain: sigchain,
+        encrypted_keys: encryptedKeys,
+      };
+    },
+
+    async restoreIdentity(dump, password, localPassword) {
+      /**
+       * Restore an identity from a dump file.
+       * @param dump - The dump object
+       * @param password - Password used to encrypt the dump
+       * @param localPassword - Password to use for local storage
+       */
+      if (dump.format !== 'distriblog-identity-dump') {
+        throw new Error('Invalid dump format');
+      }
+
+      // Decrypt keys from dump
+      let keysData;
+      try {
+        keysData = await Crypto.decryptWithPassword(dump.encrypted_keys, password);
+      } catch (e) {
+        throw new Error('Invalid password');
+      }
+
+      // Re-encrypt for local storage
+      const encryptedKeys = await Crypto.encryptWithPassword(keysData, localPassword);
+
+      // Parse keys to get public keys
+      const keys = typeof keysData === 'string' ? JSON.parse(keysData) : keysData;
+
+      // Derive public keys from secret keys using nacl
+      const signingSecretKey = decodeHex(keys.signing_key);
+      const signingKeyPair = nacl.sign.keyPair.fromSecretKey(signingSecretKey);
+      const signingPubkey = encodeHex(signingKeyPair.publicKey);
+
+      const encryptionSecretKey = decodeHex(keys.encryption_key);
+      const encryptionKeyPair = nacl.box.keyPair.fromSecretKey(encryptionSecretKey);
+      const encryptionPubkey = encodeHex(encryptionKeyPair.publicKey);
+
+      // Create identity for localStorage
+      const identity = {
+        identityHash: dump.identity_hash,
+        name: dump.sigchain?.[0]?.name || '',
+        createdAt: Date.now(),
+        storageMethod: StorageMethod.PASSWORD,
+        encryptedKeys,
+        signingPubkey,
+        encryptionPubkey,
+      };
+
+      // Check if identity already exists
+      if (this.getIdentity(dump.identity_hash)) {
+        throw new Error('Identity already exists');
+      }
+
+      this._saveIdentity(identity);
+
+      // Register sigchain with API if we have events
+      if (dump.sigchain && dump.sigchain.length > 0) {
+        try {
+          // Try to create identity on server (may already exist)
+          await api.request('POST', '/identities', { event: dump.sigchain[0] });
+        } catch (e) {
+          console.warn('Could not register identity with API:', e);
+        }
+      }
+
+      return identity;
+    },
   };
 
   const SessionKeys = {
@@ -636,6 +739,14 @@
     Alpine.data('settingsManager', () => ({
       apiUrl: '/api',
       autoLock: 5,
+      showDumpModal: false,
+      showRestoreModal: false,
+      dumpPassword: '',
+      dumpConfirmPassword: '',
+      restorePassword: '',
+      restoreLocalPassword: '',
+      restoreLocalConfirmPassword: '',
+      restoreFile: null,
 
       init() {
         this.apiUrl = Settings.get('apiUrl', '/api');
@@ -678,6 +789,101 @@
           Alpine.store('app').showSuccess(`Imported ${imported} identities`);
         } catch (e) {
           Alpine.store('app').showError('Import failed: ' + e.message);
+        }
+      },
+
+      openDumpModal() {
+        const activeHash = Alpine.store('identity').activeHash;
+        if (!activeHash) {
+          Alpine.store('app').showError('No active identity');
+          return;
+        }
+        if (!SessionKeys.isUnlocked(activeHash)) {
+          Alpine.store('app').showError('Identity must be unlocked first');
+          return;
+        }
+        this.dumpPassword = '';
+        this.dumpConfirmPassword = '';
+        this.showDumpModal = true;
+      },
+
+      async dumpIdentity() {
+        if (this.dumpPassword.length < 8) {
+          Alpine.store('app').showError('Password must be at least 8 characters');
+          return;
+        }
+        if (this.dumpPassword !== this.dumpConfirmPassword) {
+          Alpine.store('app').showError('Passwords do not match');
+          return;
+        }
+
+        const activeHash = Alpine.store('identity').activeHash;
+        Alpine.store('app').loading = true;
+
+        try {
+          const dump = await KeyStore.dumpIdentity(activeHash, this.dumpPassword);
+          const blob = new Blob([JSON.stringify(dump, null, 2)], { type: 'application/json' });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = `identity-${activeHash.slice(0, 8)}-${Date.now()}.json`;
+          a.click();
+          URL.revokeObjectURL(url);
+
+          this.showDumpModal = false;
+          Alpine.store('app').showSuccess('Identity dumped successfully');
+        } catch (e) {
+          Alpine.store('app').showError('Dump failed: ' + e.message);
+        } finally {
+          Alpine.store('app').loading = false;
+        }
+      },
+
+      openRestoreModal() {
+        this.restorePassword = '';
+        this.restoreLocalPassword = '';
+        this.restoreLocalConfirmPassword = '';
+        this.restoreFile = null;
+        this.showRestoreModal = true;
+      },
+
+      handleRestoreFile(event) {
+        this.restoreFile = event.target.files[0];
+      },
+
+      async restoreIdentity() {
+        if (!this.restoreFile) {
+          Alpine.store('app').showError('Please select a dump file');
+          return;
+        }
+        if (!this.restorePassword) {
+          Alpine.store('app').showError('Please enter the dump password');
+          return;
+        }
+        if (this.restoreLocalPassword.length < 8) {
+          Alpine.store('app').showError('Local password must be at least 8 characters');
+          return;
+        }
+        if (this.restoreLocalPassword !== this.restoreLocalConfirmPassword) {
+          Alpine.store('app').showError('Local passwords do not match');
+          return;
+        }
+
+        Alpine.store('app').loading = true;
+
+        try {
+          const text = await this.restoreFile.text();
+          const dump = JSON.parse(text);
+
+          await KeyStore.restoreIdentity(dump, this.restorePassword, this.restoreLocalPassword);
+
+          Alpine.store('identity').reload();
+          this.showRestoreModal = false;
+          Alpine.store('app').showSuccess('Identity restored successfully');
+        } catch (e) {
+          Alpine.store('app').showError('Restore failed: ' + e.message);
+        } finally {
+          Alpine.store('app').loading = false;
         }
       },
     }));

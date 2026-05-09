@@ -830,6 +830,22 @@
 
       <div class="card">
         <div class="card-header">
+          <span class="card-title">Identity Dump/Restore</span>
+        </div>
+
+        <p class="text-small text-muted mb-1">
+          Dump creates a portable backup of your active identity with encrypted private keys.
+          This file can be restored on another device or with the CLI.
+        </p>
+
+        <div class="flex gap-1 mb-1">
+          <button class="btn" @click="openDumpModal">Dump Identity</button>
+          <button class="btn btn-secondary" @click="openRestoreModal">Restore Identity</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
           <span class="card-title">Data Management</span>
         </div>
 
@@ -844,6 +860,76 @@
             Import Backup
             <input type="file" accept=".json" @change="importData" style="display: none">
           </label>
+        </div>
+      </div>
+
+      <!-- Dump Modal -->
+      <div class="modal-backdrop" x-show="showDumpModal" x-cloak @click.self="showDumpModal = false">
+        <div class="modal">
+          <div class="modal-header">
+            <span class="modal-title">Dump Identity</span>
+            <button class="modal-close" @click="showDumpModal = false">&times;</button>
+          </div>
+
+          <p class="text-small text-muted mb-1">
+            Enter a password to encrypt the dump file. You will need this password to restore.
+          </p>
+
+          <form @submit.prevent="dumpIdentity">
+            <div class="form-group">
+              <label>Password</label>
+              <input type="password" x-model="dumpPassword" placeholder="At least 8 characters">
+            </div>
+            <div class="form-group">
+              <label>Confirm Password</label>
+              <input type="password" x-model="dumpConfirmPassword" placeholder="Repeat password">
+            </div>
+
+            <button type="submit" class="btn" style="width: 100%" :disabled="$store.app.loading">
+              <span x-show="!$store.app.loading">Download Dump</span>
+              <span x-show="$store.app.loading">Creating...</span>
+            </button>
+          </form>
+        </div>
+      </div>
+
+      <!-- Restore Modal -->
+      <div class="modal-backdrop" x-show="showRestoreModal" x-cloak @click.self="showRestoreModal = false">
+        <div class="modal">
+          <div class="modal-header">
+            <span class="modal-title">Restore Identity</span>
+            <button class="modal-close" @click="showRestoreModal = false">&times;</button>
+          </div>
+
+          <form @submit.prevent="restoreIdentity">
+            <div class="form-group">
+              <label>Dump File</label>
+              <input type="file" accept=".json" @change="handleRestoreFile">
+            </div>
+
+            <div class="form-group">
+              <label>Dump Password</label>
+              <input type="password" x-model="restorePassword" placeholder="Password used when dumping">
+            </div>
+
+            <p class="text-small text-muted mb-1">
+              Set a new password for local storage on this device:
+            </p>
+
+            <div class="form-group">
+              <label>Local Password</label>
+              <input type="password" x-model="restoreLocalPassword" placeholder="At least 8 characters">
+            </div>
+            <div class="form-group">
+              <label>Confirm Local Password</label>
+              <input type="password" x-model="restoreLocalConfirmPassword" placeholder="Repeat password">
+            </div>
+
+            <button type="submit" class="btn" style="width: 100%" :disabled="$store.app.loading">
+              <span x-show="!$store.app.loading">Restore Identity</span>
+              <span x-show="$store.app.loading">Restoring...</span>
+            </button>
+          </form>
         </div>
       </div>
 

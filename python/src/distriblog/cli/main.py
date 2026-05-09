@@ -292,6 +292,121 @@ def identity_select(identity_hash: str):
     storage.close()
 
 
+@identity.command("dump")
+@click.argument("output_file", type=click.Path())
+@click.option("--password", "-p", prompt=True, hide_input=True, confirmation_prompt=True,
+              help="Password to encrypt the dump")
+def identity_dump(output_file: str, password: str):
+    """Dump identity with encrypted private keys.
+
+    Creates a complete backup including private keys, encrypted with a password.
+    This can be restored on another device with 'identity restore'.
+
+    The dump format is compatible with the web client.
+    """
+    from distriblog.core.crypto import password_encrypt
+
+    storage = get_storage()
+    ident = get_default_identity(storage)
+
+    if not ident:
+        click.echo("No default identity. Create one with: distriblog identity create")
+        storage.close()
+        return
+
+    if not ident.local_keypair:
+        click.echo("Cannot dump: no local keys for this identity")
+        storage.close()
+        return
+
+    storage.close()
+
+    # Prepare the data to encrypt (private keys)
+    keys_data = json.dumps(ident.local_keypair.to_dict()).encode("utf-8")
+    encrypted_keys = password_encrypt(keys_data, password)
+
+    # Create the dump (format compatible with web client)
+    dump = {
+        "version": 1,
+        "format": "distriblog-identity-dump",
+        "identity_hash": ident.identity_hash,
+        "sigchain": ident.sigchain.to_list(),
+        "encrypted_keys": encrypted_keys,  # hex string, PBKDF2+AES-GCM
+    }
+
+    with open(output_file, "w") as f:
+        json.dump(dump, f, indent=2)
+
+    click.echo(f"Identity dumped to {output_file}")
+    click.echo(f"Identity hash: {ident.identity_hash}")
+    click.echo("Keep this file and password safe - they contain your private keys!")
+
+
+@identity.command("restore")
+@click.argument("input_file", type=click.Path(exists=True))
+@click.option("--password", "-p", prompt=True, hide_input=True,
+              help="Password to decrypt the dump")
+@click.option("--default/--no-default", default=True, help="Set as default identity")
+def identity_restore(input_file: str, password: str, default: bool):
+    """Restore identity from encrypted dump.
+
+    Restores a complete identity including private keys from a dump file
+    created with 'identity dump' or exported from the web client.
+    """
+    from distriblog.core.crypto import password_decrypt
+    from distriblog.core.identity import Sigchain
+
+    storage = get_storage()
+
+    # Load the dump
+    with open(input_file, "r") as f:
+        dump = json.load(f)
+
+    # Validate format
+    if dump.get("format") != "distriblog-identity-dump":
+        click.echo("Invalid dump file format")
+        storage.close()
+        return
+
+    version = dump.get("version", 1)
+    if version != 1:
+        click.echo(f"Unsupported dump version: {version}")
+        storage.close()
+        return
+
+    # Decrypt private keys (encrypted_keys is a hex string)
+    try:
+        keys_data = password_decrypt(dump["encrypted_keys"], password)
+        keypair = KeyPair.from_dict(json.loads(keys_data.decode("utf-8")))
+    except ValueError as e:
+        click.echo(f"Failed to decrypt: {e}")
+        storage.close()
+        return
+
+    # Parse and verify sigchain
+    sigchain = Sigchain.from_list(dump["sigchain"])
+    valid, error = sigchain.verify()
+    if not valid:
+        click.echo(f"Invalid sigchain: {error}")
+        storage.close()
+        return
+
+    # Verify the keypair matches the sigchain
+    if keypair.verify_key.to_hex() != sigchain.genesis.pubkey:
+        click.echo("Error: Private key does not match sigchain public key")
+        storage.close()
+        return
+
+    # Create identity and save
+    ident = Identity(sigchain=sigchain, local_keypair=keypair)
+    storage.save_local_identity(ident, is_default=default)
+    storage.close()
+
+    click.echo(f"Identity restored: {ident.identity_hash}")
+    if default:
+        click.echo("Set as default identity")
+
+
 # Trust commands
 
 
