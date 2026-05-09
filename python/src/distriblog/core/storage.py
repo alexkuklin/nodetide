@@ -557,3 +557,25 @@ class Storage:
                 (from_identity,),
             )
             return [dict(row) for row in cur.fetchall()]
+
+    def set_default_identity(self, identity_hash: str) -> bool:
+        """Set an existing local identity as the default.
+
+        Returns True if successful, False if identity not found.
+        """
+        with self.transaction() as cur:
+            # Check if identity exists
+            cur.execute(
+                "SELECT identity_hash FROM local_identities WHERE identity_hash = ?",
+                (identity_hash,),
+            )
+            if not cur.fetchone():
+                return False
+
+            # Clear all defaults, then set the new one
+            cur.execute("UPDATE local_identities SET is_default = 0")
+            cur.execute(
+                "UPDATE local_identities SET is_default = 1 WHERE identity_hash = ?",
+                (identity_hash,),
+            )
+            return True

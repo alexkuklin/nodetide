@@ -416,7 +416,7 @@
     }
   </style>
 </head>
-<body x-data x-init="$store.app.init()">
+<body x-data x-init="$store.app.init(); $store.identity.init()">
 
   <!-- Offline banner -->
   <div class="offline-banner" x-show="!$store.app.online" x-cloak>
@@ -427,10 +427,13 @@
   <header>
     <div class="container flex flex-between">
       <h1>Distriblog</h1>
-      <div x-data="identityManager">
-        <span class="text-small text-muted" x-show="activeIdentity">
-          <span class="status-dot" :class="isUnlocked(activeIdentity?.identityHash) ? 'status-unlocked' : 'status-locked'"></span>
-          <span x-text="activeIdentity?.name || truncateHash(activeIdentity?.identityHash)"></span>
+      <div>
+        <span class="text-small text-muted" x-show="$store.identity.activeIdentity">
+          <span class="status-dot" :class="$store.identity.isUnlocked($store.identity.activeHash) ? 'status-unlocked' : 'status-locked'"></span>
+          <span x-text="$store.identity.activeIdentity?.name || ($store.identity.activeHash ? $store.identity.activeHash.slice(0, 8) + '...' : '')"></span>
+        </span>
+        <span class="text-small text-muted" x-show="!$store.identity.activeIdentity">
+          No active identity
         </span>
       </div>
     </div>

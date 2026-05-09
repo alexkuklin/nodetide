@@ -258,6 +258,40 @@ def identity_import(input_file: str):
     click.echo(f"Imported sigchain: {sigchain.identity_hash}")
 
 
+@identity.command("select")
+@click.argument("identity_hash")
+def identity_select(identity_hash: str):
+    """Select an identity as the default/active identity."""
+    storage = get_storage()
+
+    # Support partial hash matching
+    identities = storage.list_local_identities()
+    matches = [h for h in identities if h.startswith(identity_hash)]
+
+    if not matches:
+        click.echo(f"No identity found matching: {identity_hash}")
+        click.echo("Available identities:")
+        for h in identities:
+            click.echo(f"  {h}")
+        storage.close()
+        return
+
+    if len(matches) > 1:
+        click.echo(f"Ambiguous hash prefix. Matches:")
+        for h in matches:
+            click.echo(f"  {h}")
+        storage.close()
+        return
+
+    full_hash = matches[0]
+    if storage.set_default_identity(full_hash):
+        click.echo(f"Selected identity: {full_hash}")
+    else:
+        click.echo(f"Failed to select identity: {full_hash}")
+
+    storage.close()
+
+
 # Trust commands
 
 

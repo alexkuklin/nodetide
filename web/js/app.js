@@ -357,24 +357,51 @@
       },
     });
 
-    // Identity manager
-    Alpine.data('identityManager', () => ({
+    // Shared identity state (reactive across all components)
+    Alpine.store('identity', {
       identities: [],
       activeIdentity: null,
+      activeHash: null,
+
+      init() {
+        this.reload();
+      },
+
+      reload() {
+        this.identities = KeyStore.listIdentities();
+        this.activeHash = KeyStore.getActiveIdentity();
+        if (this.activeHash) {
+          this.activeIdentity = this.identities.find(i => i.identityHash === this.activeHash) || null;
+        } else {
+          this.activeIdentity = null;
+        }
+      },
+
+      setActive(identityHash) {
+        KeyStore.setActiveIdentity(identityHash);
+        this.reload();
+      },
+
+      isUnlocked(identityHash) {
+        return SessionKeys.isUnlocked(identityHash);
+      },
+    });
+
+    // Identity manager
+    Alpine.data('identityManager', () => ({
       showCreateModal: false,
       showUnlockModal: false,
       unlockingIdentity: null,
       createForm: { name: '', method: 'password', password: '', confirmPassword: '' },
       unlockPassword: '',
 
-      init() { this.loadIdentities(); },
+      // Use store for shared state
+      get identities() { return Alpine.store('identity').identities; },
+      get activeIdentity() { return Alpine.store('identity').activeIdentity; },
 
-      loadIdentities() {
-        this.identities = KeyStore.listIdentities();
-        const activeHash = KeyStore.getActiveIdentity();
-        if (activeHash) {
-          this.activeIdentity = this.identities.find(i => i.identityHash === activeHash);
-        }
+      init() {
+        // Reload store on init to ensure fresh data
+        Alpine.store('identity').reload();
       },
 
       get webauthnSupported() { return false; }, // Simplified - disabled for now
@@ -405,9 +432,8 @@
           }
 
           SessionKeys.set(result.identity.identityHash, result.keyPair);
-          KeyStore.setActiveIdentity(result.identity.identityHash);
+          Alpine.store('identity').setActive(result.identity.identityHash);
 
-          this.loadIdentities();
           this.showCreateModal = false;
           this.createForm = { name: '', method: 'password', password: '', confirmPassword: '' };
 
@@ -437,7 +463,7 @@
           );
 
           SessionKeys.set(this.unlockingIdentity.identityHash, keyPair);
-          KeyStore.setActiveIdentity(this.unlockingIdentity.identityHash);
+          Alpine.store('identity').setActive(this.unlockingIdentity.identityHash);
 
           try {
             await api.createSession(this.unlockingIdentity.identityHash, keyPair);
@@ -445,7 +471,6 @@
             console.warn('Failed to create API session:', e);
           }
 
-          this.loadIdentities();
           this.showUnlockModal = false;
           this.unlockingIdentity = null;
 
@@ -462,19 +487,18 @@
       lockIdentity(identityHash) {
         SessionKeys.lock(identityHash);
         if (KeyStore.getActiveIdentity() === identityHash) api.clearSession();
-        this.loadIdentities();
+        Alpine.store('identity').reload();
       },
 
       setActive(identityHash) {
-        KeyStore.setActiveIdentity(identityHash);
-        this.loadIdentities();
+        Alpine.store('identity').setActive(identityHash);
       },
 
       deleteIdentity(identityHash) {
         if (!confirm('Are you sure you want to delete this identity?')) return;
         KeyStore.deleteIdentity(identityHash);
         SessionKeys.lock(identityHash);
-        this.loadIdentities();
+        Alpine.store('identity').reload();
         Alpine.store('app').showSuccess('Identity deleted');
       },
 
@@ -484,36 +508,64 @@
 
     // Identity detail
     Alpine.data('identityDetail', () => ({
-      identity: null,
       sigchain: [],
       devices: [],
       recovery: null,
       loading: false,
+      lastLoadedHash: null,
 
-      init() { this.load(); },
+      // Use store for identity
+      get identity() { return Alpine.store('identity').activeIdentity; },
+
+      init() {
+        // Watch for view changes to reload when becoming visible
+        this.$watch('$store.app.currentView', (view) => {
+          if (view === 'identity') {
+            this.load();
+          }
+        });
+        // Also watch for active identity changes
+        this.$watch('$store.identity.activeHash', () => {
+          if (Alpine.store('app').currentView === 'identity') {
+            this.load();
+          }
+        });
+        // Initial load if we're on this view
+        if (Alpine.store('app').currentView === 'identity') {
+          this.load();
+        }
+      },
 
       async load() {
-        const activeHash = KeyStore.getActiveIdentity();
+        const activeHash = Alpine.store('identity').activeHash;
         if (!activeHash) {
-          Alpine.store('app').setView('identities');
           return;
         }
 
-        this.identity = KeyStore.getIdentity(activeHash);
+        // Skip if already loaded this hash
+        if (this.lastLoadedHash === activeHash && this.sigchain.length > 0) {
+          return;
+        }
+
         this.loading = true;
+        this.lastLoadedHash = activeHash;
 
         try {
           const data = await api.getIdentity(activeHash);
           this.sigchain = data.sigchain || [];
+          this.devices = data.devices || [];
+          this.recovery = data.recovery || null;
         } catch (e) {
-          console.warn('Failed to load identity:', e);
+          console.warn('Failed to load identity from API:', e);
           this.sigchain = [];
+          this.devices = [];
+          this.recovery = null;
         } finally {
           this.loading = false;
         }
       },
 
-      get activeDevices() { return []; },
+      get activeDevices() { return this.devices; },
     }));
 
     // QR manager
