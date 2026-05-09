@@ -1,0 +1,37 @@
+# Distriblog Python Base Image
+# Pre-installs all dependencies for faster builds
+#
+# Build: docker build -f python/Dockerfile.base -t distriblog-python-base .
+# This image should be rebuilt when dependencies change in pyproject.toml
+
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install build dependencies (needed for cryptography, pynacl)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    libffi-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python dependencies
+# These are pinned to match pyproject.toml requirements
+RUN pip install --no-cache-dir \
+    "cryptography>=41.0" \
+    "pynacl>=1.5" \
+    "zeroconf>=0.80" \
+    "click>=8.0" \
+    "aiosqlite>=0.19" \
+    "aiohttp>=3.9" \
+    "pydantic>=2.0" \
+    hatchling \
+    build
+
+# Install runtime dependencies and create user
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libffi8 \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --create-home --shell /bin/bash distriblog
+
+# Create data directory
+RUN mkdir -p /data && chown distriblog:distriblog /data

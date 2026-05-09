@@ -1,47 +1,22 @@
 # Distriblog Python Docker Image
-# Multi-stage build for smaller final image
+# Uses pre-built base image with dependencies for faster builds
 
-# Build stage
-FROM python:3.11-slim as builder
+# Base image with pre-installed dependencies
+ARG BASE_IMAGE=distriblog-python-base:latest
+FROM ${BASE_IMAGE}
 
-WORKDIR /build
-
-# Install build dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc \
-    libffi-dev \
-    && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
 
 # Copy project files
 COPY python/pyproject.toml .
 COPY README.md .
 COPY python/src/ src/
 
-# Build wheel
-RUN pip install --no-cache-dir build && \
-    python -m build --wheel
-
-
-# Runtime stage
-FROM python:3.11-slim
-
-WORKDIR /app
-
-# Install runtime dependencies only
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    libffi8 \
-    && rm -rf /var/lib/apt/lists/* \
-    && useradd --create-home --shell /bin/bash distriblog
-
-# Copy wheel from builder and install
-COPY --from=builder /build/dist/*.whl /tmp/
-RUN pip install --no-cache-dir /tmp/*.whl && rm /tmp/*.whl
+# Install the package (dependencies already in base image)
+RUN pip install --no-cache-dir --no-deps .
 
 # Copy web client files
 COPY web/ /app/web/
-
-# Create data directory
-RUN mkdir -p /data && chown distriblog:distriblog /data
 
 # Switch to non-root user
 USER distriblog
