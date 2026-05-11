@@ -180,7 +180,7 @@
       }
     },
 
-    async createIdentityWithPassword(name, password) {
+    async createIdentityWithPassword(name, password, distributionPoints = null) {
       const keyPair = Crypto.generateKeyPair();
       const identityHash = await sha256(keyPair.signing.publicKey);
       const encryptedKeys = await Crypto.encryptWithPassword(keyPair, password);
@@ -193,6 +193,7 @@
         encryptedKeys,
         signingPubkey: keyPair.signing.publicKey,
         encryptionPubkey: keyPair.encryption.publicKey,
+        distributionPoints: distributionPoints,
       };
 
       this._saveIdentity(identity);
@@ -384,7 +385,7 @@
       return response.json();
     },
 
-    async createIdentity(keyPair, name) {
+    async createIdentity(keyPair, name, distributionPoints = null) {
       const timestamp = Math.floor(Date.now() / 1000);
       const event = {
         // Base SigchainEvent fields
@@ -402,6 +403,7 @@
         name: name || null,
         ephemeral: false,
         ownership_proof: null,
+        distribution_points: distributionPoints,
       };
       const signable = canonicalize(event);
       event.signature = Crypto.sign(signable, keyPair.signing.secretKey);
@@ -511,7 +513,7 @@
       showCreateModal: false,
       showUnlockModal: false,
       unlockingIdentity: null,
-      createForm: { name: '', method: 'password', password: '', confirmPassword: '' },
+      createForm: { name: '', method: 'password', password: '', confirmPassword: '', distributionPoints: '' },
       unlockPassword: '',
 
       // Use store for shared state
@@ -526,7 +528,7 @@
       get webauthnSupported() { return false; }, // Simplified - disabled for now
 
       async createIdentity() {
-        const { name, method, password, confirmPassword } = this.createForm;
+        const { name, method, password, confirmPassword, distributionPoints } = this.createForm;
 
         if (method === 'password') {
           if (!password || password.length < 8) {
@@ -539,13 +541,18 @@
           }
         }
 
+        // Parse distribution points (one per line or comma-separated)
+        const distPoints = distributionPoints
+          ? distributionPoints.split(/[\n,]/).map(s => s.trim()).filter(s => s)
+          : null;
+
         Alpine.store('app').loading = true;
 
         try {
-          const result = await KeyStore.createIdentityWithPassword(name, password);
+          const result = await KeyStore.createIdentityWithPassword(name, password, distPoints);
 
           try {
-            await api.createIdentity(result.keyPair, name);
+            await api.createIdentity(result.keyPair, name, distPoints);
           } catch (e) {
             console.warn('Failed to register identity with API:', e);
           }
@@ -554,7 +561,7 @@
           Alpine.store('identity').setActive(result.identity.identityHash);
 
           this.showCreateModal = false;
-          this.createForm = { name: '', method: 'password', password: '', confirmPassword: '' };
+          this.createForm = { name: '', method: 'password', password: '', confirmPassword: '', distributionPoints: '' };
 
           Alpine.store('app').showSuccess('Identity created successfully');
         } catch (e) {

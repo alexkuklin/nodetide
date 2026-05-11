@@ -76,6 +76,7 @@ Identity = hash(event_0) = "7f3a8b..." (stable forever)
 |-------|-----------|---------|
 | `GENESIS` | self | Create identity (minimal, no trustees required) |
 | `SET_RECOVERY` | master | Add/update recovery trustees (optional, anytime) |
+| `SET_DISTRIBUTION` | master | Update distribution points (where to reach this identity) |
 | `ADD_DEVICE` | master | Authorize sub-key |
 | `REVOKE_DEVICE` | master | Explicit revocation |
 | `ROTATE_MASTER` | old master | Normal key rotation |
@@ -87,6 +88,113 @@ Two mechanisms:
 
 1. **Explicit revocation** - `REVOKE_DEVICE` event signed by master key
 2. **Expiration** - Optional `expires` timestamp on device keys
+
+## Distribution Points
+
+Distribution points are URIs where an identity can be reached. They help with initial contact and routing.
+
+### Setting Distribution Points
+
+Distribution points can be set at identity creation or updated later:
+
+**At creation (in GENESIS):**
+```
+GENESIS = {
+  pubkey: <master_pubkey>,
+  distribution_points: [
+    "https://relay.example.com/users/alice",
+    "dtn://node.local:4556",
+    "mesh://abc123"
+  ],
+  sig: <self-signed>
+}
+```
+
+**Update later:**
+```
+SET_DISTRIBUTION = {
+  distribution_points: [
+    "https://new-relay.example.com/alice",
+    "dtn://home.local:4556"
+  ],
+  prev: <hash>,
+  sig: <signed by master>
+}
+```
+
+### URI Formats
+
+Distribution points use standard URI formats:
+
+| Scheme | Example | Use |
+|--------|---------|-----|
+| `https://` | `https://relay.example.com/users/alice` | Web relay |
+| `wss://` | `wss://relay.example.com/ws` | WebSocket relay |
+| `mailto:` | `mailto:alice@example.com` | Email (SMTP) |
+| `dtn://` | `dtn://node.local:4556` | DTN node (TCP) |
+| `mesh://` | `mesh://abc123` | Mesh network address |
+| `bt://` | `bt://AA:BB:CC:DD:EE:FF` | Bluetooth address |
+
+### Email Transport (SMTP)
+
+Email provides a ubiquitous, delay-tolerant transport layer. Messages are encoded in request/response email format.
+
+**Request Email Format:**
+```
+From: sender@example.com
+To: recipient@example.com
+Subject: [DISTRIBLOG] <message-type> <message-id-short>
+Content-Type: application/json; charset=utf-8
+X-Distriblog-Version: 1
+X-Distriblog-Type: <bundle-type>
+X-Distriblog-Sender: <sender-identity-hash>
+
+<JSON-encoded bundle>
+```
+
+**Response Email Format:**
+```
+From: recipient@example.com
+To: sender@example.com
+Subject: Re: [DISTRIBLOG] <message-type> <message-id-short>
+Content-Type: application/json; charset=utf-8
+In-Reply-To: <original-message-id>
+X-Distriblog-Version: 1
+X-Distriblog-Type: ack
+X-Distriblog-Sender: <recipient-identity-hash>
+
+<JSON-encoded response/ack>
+```
+
+**Message Types in Subject:**
+| Type | Subject Example |
+|------|-----------------|
+| Sigchain sync | `[DISTRIBLOG] sigchain 7f3a8b` |
+| Private message | `[DISTRIBLOG] message a2c4d6` |
+| Delivery ack | `[DISTRIBLOG] ack b3e5f7` |
+| Revocation | `[DISTRIBLOG] revocation c4f6g8` |
+
+**Large Content:**
+
+For content exceeding email size limits (~25MB typical):
+1. Send `ContentAnnounce` via email with available fetch methods
+2. Recipient requests chunks via separate emails or alternative transport
+3. Or use multipart MIME with chunked attachments
+
+**Security Considerations:**
+- Email transport is public - always encrypt sensitive content at message layer
+- SPF/DKIM/DMARC help prevent spoofing but don't replace signature verification
+- Email metadata (sender, recipient, timestamps) is visible to mail servers
+- Consider using dedicated email addresses for distriblog traffic
+
+### Resolution
+
+When contacting an identity:
+1. Check sigchain for current `distribution_points` (latest SET_DISTRIBUTION or GENESIS)
+2. Try each distribution point in order
+3. Fall back to other discovery mechanisms if all fail
+
+Distribution points are hints, not authoritative. The identity hash remains the true identifier.
 
 ## Verification Rules
 
@@ -517,6 +625,16 @@ Pluggable transport modules. Each CLA handles discovery, connection, and data tr
 | Use | Community networks, events |
 
 #### High Latency
+
+**Email (SMTP)**
+| Aspect | Details |
+|--------|---------|
+| Discovery | Email address in distribution_points |
+| Connection | Standard SMTP/IMAP |
+| Latency | Minutes to hours |
+| Bandwidth | Moderate (~25MB per message) |
+| Coverage | Ubiquitous |
+| Use | Async communication, fallback transport, notifications |
 
 **Sneakernet**
 | Aspect | Details |

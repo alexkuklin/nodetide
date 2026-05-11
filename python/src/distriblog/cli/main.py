@@ -50,13 +50,20 @@ def identity():
 @identity.command("create")
 @click.option("--name", "-n", help="Display name for the identity")
 @click.option("--type", "identity_type", type=click.Choice(["personal", "organization", "ephemeral"]), default="personal")
+@click.option("--distribution", "-d", multiple=True, help="Distribution point URI (can be specified multiple times)")
 @click.option("--default/--no-default", default=True, help="Set as default identity")
-def identity_create(name: str | None, identity_type: str, default: bool):
-    """Create a new identity."""
+def identity_create(name: str | None, identity_type: str, distribution: tuple[str, ...], default: bool):
+    """Create a new identity.
+
+    Distribution points are URIs where this identity can be reached, e.g.:
+      -d https://relay.example.com/api
+      -d tcp://node.example.com:4557
+    """
     storage = get_storage()
 
     id_type = IdentityType(identity_type)
-    ident = Identity.create(identity_type=id_type, name=name)
+    dist_points = list(distribution) if distribution else None
+    ident = Identity.create(identity_type=id_type, name=name, distribution_points=dist_points)
 
     # Save to storage
     storage.save_local_identity(ident, is_default=default)
@@ -66,6 +73,8 @@ def identity_create(name: str | None, identity_type: str, default: bool):
     if name:
         click.echo(f"Name: {name}")
     click.echo(f"Type: {identity_type}")
+    if dist_points:
+        click.echo(f"Distribution points: {', '.join(dist_points)}")
 
 
 @identity.command("list")
@@ -124,6 +133,12 @@ def identity_show(identity_hash: str | None):
         click.echo(f"Type: {genesis.identity_type.value}")
         click.echo(f"Created: {genesis.timestamp}")
 
+    dist_points = ident.sigchain.get_distribution_points()
+    if dist_points:
+        click.echo(f"Distribution points:")
+        for dp in dist_points:
+            click.echo(f"  - {dp}")
+
     click.echo(f"Events: {len(ident.sigchain.events)}")
 
     devices = ident.sigchain.get_active_devices()
@@ -181,6 +196,35 @@ def identity_revoke_device(device_pubkey: str, reason: str | None):
     storage.close()
 
     click.echo(f"Revoked device: {device_pubkey[:16]}...")
+
+
+@identity.command("set-distribution")
+@click.option("--distribution", "-d", multiple=True, required=True, help="Distribution point URI (can be specified multiple times)")
+def identity_set_distribution(distribution: tuple[str, ...]):
+    """Set or update distribution points.
+
+    Distribution points are URIs where this identity can be reached.
+    This replaces all existing distribution points.
+
+    Example:
+      distriblog identity set-distribution -d https://relay.example.com -d mailto:me@example.com
+    """
+    storage = get_storage()
+    ident = get_default_identity(storage)
+
+    if not ident:
+        click.echo("No default identity. Create one with: distriblog identity create")
+        return
+
+    dist_points = list(distribution)
+    event = ident.set_distribution_points(dist_points)
+
+    storage.save_sigchain(ident.sigchain)
+    storage.close()
+
+    click.echo("Updated distribution points:")
+    for dp in dist_points:
+        click.echo(f"  - {dp}")
 
 
 @identity.command("set-recovery")

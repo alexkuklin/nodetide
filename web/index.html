@@ -554,6 +554,13 @@
               </div>
             </template>
 
+            <div class="form-group">
+              <label>Distribution Points (optional)</label>
+              <textarea x-model="createForm.distributionPoints" rows="2"
+                        placeholder="URIs where this identity can be reached (one per line)&#10;e.g., https://relay.example.com/api"></textarea>
+              <div class="text-small text-muted">Endpoints for message delivery</div>
+            </div>
+
             <button type="submit" class="btn" style="width: 100%" :disabled="$store.app.loading">
               <span x-show="!$store.app.loading">Create Identity</span>
               <span x-show="$store.app.loading">Creating...</span>

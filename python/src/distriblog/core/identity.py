@@ -34,6 +34,7 @@ class EventType(str, Enum):
     SET_RECOVERY = "set_recovery"
     SOCIAL_RECOVERY = "social_recovery"
     RESOLVE_FORK = "resolve_fork"
+    SET_DISTRIBUTION = "set_distribution"
 
 
 class IdentityType(str, Enum):
@@ -102,6 +103,7 @@ class SigchainEvent:
             EventType.SET_RECOVERY: SetRecoveryEvent,
             EventType.SOCIAL_RECOVERY: SocialRecoveryEvent,
             EventType.RESOLVE_FORK: ResolveForkEvent,
+            EventType.SET_DISTRIBUTION: SetDistributionEvent,
         }
 
         event_class = event_classes.get(event_type)
@@ -121,6 +123,7 @@ class GenesisEvent(SigchainEvent):
     name: str | None = None  # optional display name
     ephemeral: bool = False
     ownership_proof: str | None = None  # for ephemeral, link to persistent identity
+    distribution_points: list[str] | None = None  # initial distribution endpoints
 
     def __post_init__(self):
         self.type = EventType.GENESIS
@@ -135,6 +138,7 @@ class GenesisEvent(SigchainEvent):
             "name": self.name,
             "ephemeral": self.ephemeral,
             "ownership_proof": self.ownership_proof,
+            "distribution_points": self.distribution_points,
         })
         return d
 
@@ -155,6 +159,7 @@ class GenesisEvent(SigchainEvent):
             name=data.get("name"),
             ephemeral=data.get("ephemeral", False),
             ownership_proof=data.get("ownership_proof"),
+            distribution_points=data.get("distribution_points"),
         )
 
     @classmethod
@@ -165,6 +170,7 @@ class GenesisEvent(SigchainEvent):
         name: str | None = None,
         ephemeral: bool = False,
         ownership_proof: str | None = None,
+        distribution_points: list[str] | None = None,
     ) -> GenesisEvent:
         """Create and sign a new genesis event."""
         event = cls(
@@ -179,6 +185,7 @@ class GenesisEvent(SigchainEvent):
             name=name,
             ephemeral=ephemeral,
             ownership_proof=ownership_proof,
+            distribution_points=distribution_points,
         )
         # Sign the event
         signable = json.dumps(event.signable_dict(), sort_keys=True, separators=(",", ":"))
@@ -540,6 +547,57 @@ class ResolveForkEvent(SigchainEvent):
         return event
 
 
+@dataclass(kw_only=True)
+class SetDistributionEvent(SigchainEvent):
+    """Update distribution points for the identity."""
+
+    distribution_points: list[str]  # list of endpoint URIs
+
+    def __post_init__(self):
+        self.type = EventType.SET_DISTRIBUTION
+
+    def to_dict(self) -> dict[str, Any]:
+        d = super().to_dict()
+        d.update({
+            "distribution_points": self.distribution_points,
+        })
+        return d
+
+    @classmethod
+    def _from_dict(cls, data: dict[str, Any]) -> SetDistributionEvent:
+        return cls(
+            type=EventType.SET_DISTRIBUTION,
+            timestamp=data["timestamp"],
+            prev=data["prev"],
+            signature=data["signature"],
+            signed_by=data["signed_by"],
+            version=data.get("version", 1),
+            alg=data.get("alg", DEFAULT_SIGN_ALG),
+            hash_alg=data.get("hash_alg", DEFAULT_HASH_ALG),
+            distribution_points=data["distribution_points"],
+        )
+
+    @classmethod
+    def create(
+        cls,
+        master_keypair: KeyPair,
+        prev_hash: str,
+        distribution_points: list[str],
+    ) -> SetDistributionEvent:
+        """Create and sign a set distribution event."""
+        event = cls(
+            type=EventType.SET_DISTRIBUTION,
+            timestamp=int(time.time()),
+            prev=prev_hash,
+            signature="",
+            signed_by=master_keypair.verify_key.to_hex(),
+            distribution_points=distribution_points,
+        )
+        signable = json.dumps(event.signable_dict(), sort_keys=True, separators=(",", ":"))
+        event.signature = master_keypair.sign_hex(signable.encode("utf-8"))
+        return event
+
+
 @dataclass
 class DeviceInfo:
     """Information about an active device."""
@@ -661,6 +719,20 @@ class Sigchain:
                 recovery = event
         return recovery
 
+    def get_distribution_points(self) -> list[str]:
+        """Get the current distribution points.
+
+        Returns distribution points from the most recent SET_DISTRIBUTION event,
+        or from the genesis event if no SET_DISTRIBUTION has been issued.
+        """
+        points: list[str] = []
+        for event in self.events:
+            if isinstance(event, GenesisEvent) and event.distribution_points:
+                points = event.distribution_points
+            elif isinstance(event, SetDistributionEvent):
+                points = event.distribution_points
+        return points
+
     def verify(self) -> tuple[bool, str | None]:
         """Verify the sigchain.
 
@@ -700,7 +772,7 @@ class Sigchain:
                 return False, f"Event {i}: signature invalid"
 
             # Check authorization
-            if isinstance(event, (AddDeviceEvent, RevokeDeviceEvent, SetRecoveryEvent, ResolveForkEvent)):
+            if isinstance(event, (AddDeviceEvent, RevokeDeviceEvent, SetRecoveryEvent, ResolveForkEvent, SetDistributionEvent)):
                 # Must be signed by current master
                 if event.signed_by != current_master:
                     return False, f"Event {i}: must be signed by master key"
@@ -741,6 +813,7 @@ class Identity:
         identity_type: IdentityType = IdentityType.PERSONAL,
         name: str | None = None,
         ephemeral: bool = False,
+        distribution_points: list[str] | None = None,
     ) -> Identity:
         """Create a new identity."""
         keypair = KeyPair.generate()
@@ -749,6 +822,7 @@ class Identity:
             identity_type=identity_type,
             name=name,
             ephemeral=ephemeral,
+            distribution_points=distribution_points,
         )
         sigchain = Sigchain(events=[genesis])
         return cls(sigchain=sigchain, local_keypair=keypair)
@@ -824,6 +898,19 @@ class Identity:
             backup_trustees=backup_trustees,
             backup_threshold=backup_threshold,
             backup_activates_after=backup_activates_after,
+        )
+        self.sigchain.append(event)
+        return event
+
+    def set_distribution_points(self, distribution_points: list[str]) -> SetDistributionEvent:
+        """Set or update distribution points."""
+        if not self.local_keypair:
+            raise ValueError("Cannot set distribution points: no local keypair")
+
+        event = SetDistributionEvent.create(
+            master_keypair=self.local_keypair,
+            prev_hash=self.sigchain.head_hash,
+            distribution_points=distribution_points,
         )
         self.sigchain.append(event)
         return event
