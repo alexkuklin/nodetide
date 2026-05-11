@@ -22,6 +22,7 @@ async def health_handler(request: web.Request) -> web.Response:
     return web.json_response({
         "status": "healthy",
         "service": "distriblog",
+        "commit": os.environ.get("GIT_COMMIT", "dev"),
     })
 
 

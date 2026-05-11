@@ -454,11 +454,21 @@
       loading: false,
       error: null,
       success: null,
+      commit: null,
 
-      init() {
+      async init() {
         this.initialized = true;
         window.addEventListener('online', () => this.online = true);
         window.addEventListener('offline', () => this.online = false);
+
+        // Fetch version info
+        try {
+          const resp = await fetch('/health');
+          const data = await resp.json();
+          this.commit = data.commit;
+        } catch (e) {
+          console.warn('Failed to fetch version:', e);
+        }
       },
 
       setView(view) {

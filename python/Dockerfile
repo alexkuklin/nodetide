@@ -3,6 +3,7 @@
 
 # Base image with pre-installed dependencies
 ARG BASE_IMAGE=distriblog-python-base:latest
+ARG GIT_COMMIT=unknown
 FROM ${BASE_IMAGE}
 
 WORKDIR /app
@@ -22,6 +23,8 @@ COPY web/ /app/web/
 USER distriblog
 
 # Environment variables
+ARG GIT_COMMIT
+ENV GIT_COMMIT=${GIT_COMMIT}
 ENV DISTRIBLOG_HOST=0.0.0.0
 ENV DISTRIBLOG_PORT=4557
 ENV DISTRIBLOG_DB_PATH=/data/distriblog.db
