@@ -19,6 +19,10 @@ RUN pip install --no-cache-dir --no-deps .
 # Copy web client files
 COPY web/ /app/web/
 
+# Inject version into web client
+ARG GIT_COMMIT
+RUN sed -i "s/__GIT_COMMIT__/${GIT_COMMIT}/g" /app/web/js/app.js
+
 # Switch to non-root user
 USER distriblog
 

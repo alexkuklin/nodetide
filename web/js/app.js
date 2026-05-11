@@ -6,6 +6,9 @@
 (function() {
   'use strict';
 
+  // Version injected at build time (replaced by Dockerfile)
+  const WEB_VERSION = '__GIT_COMMIT__';
+
   // ============================================
   // CRYPTO MODULE
   // ============================================
@@ -454,18 +457,19 @@
       loading: false,
       error: null,
       success: null,
-      commit: null,
+      webVersion: WEB_VERSION.startsWith('__') ? 'dev' : WEB_VERSION,
+      apiVersion: null,
 
       async init() {
         this.initialized = true;
         window.addEventListener('online', () => this.online = true);
         window.addEventListener('offline', () => this.online = false);
 
-        // Fetch version info
+        // Fetch API version info
         try {
           const resp = await fetch('/health');
           const data = await resp.json();
-          this.commit = data.commit;
+          this.apiVersion = data.commit;
         } catch (e) {
           console.warn('Failed to fetch version:', e);
         }
