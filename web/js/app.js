@@ -118,25 +118,14 @@
     async decryptWithPassword(encrypted, password) {
       const encoder = new TextEncoder();
 
-      // Handle both formats: explicit object or legacy hex string
-      let salt, iv, ciphertext, iterations;
-      if (typeof encrypted === 'string') {
-        // Legacy hex format: salt (16) + iv (12) + ciphertext
-        const data = decodeHex(encrypted);
-        salt = data.slice(0, 16);
-        iv = data.slice(16, 28);
-        ciphertext = data.slice(28);
-        iterations = 100000;
-      } else {
-        // Explicit format
-        if (encrypted.v && encrypted.v !== 1) {
-          throw new Error(`Unsupported encryption version: ${encrypted.v}`);
-        }
-        salt = decodeHex(encrypted.salt);
-        iv = decodeHex(encrypted.iv);
-        ciphertext = decodeHex(encrypted.ciphertext);
-        iterations = encrypted.kdf_iterations || 100000;
+      if (encrypted.v !== 1) {
+        throw new Error(`Unsupported encryption version: ${encrypted.v}`);
       }
+
+      const salt = decodeHex(encrypted.salt);
+      const iv = decodeHex(encrypted.iv);
+      const ciphertext = decodeHex(encrypted.ciphertext);
+      const iterations = encrypted.kdf_iterations;
 
       const keyMaterial = await crypto.subtle.importKey(
         'raw', encoder.encode(password), 'PBKDF2', false, ['deriveBits', 'deriveKey']

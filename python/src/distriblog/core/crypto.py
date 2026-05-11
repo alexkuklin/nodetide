@@ -397,15 +397,11 @@ def password_encrypt(plaintext: bytes, password: str) -> dict[str, Any]:
     }
 
 
-def password_decrypt(encrypted: dict[str, Any] | str, password: str) -> bytes:
+def password_decrypt(encrypted: dict[str, Any], password: str) -> bytes:
     """Decrypt data encrypted with password_encrypt.
 
-    Supports both:
-    - New format: dict with explicit encryption parameters
-    - Legacy format: hex string (salt + iv + ciphertext) for web client compatibility
-
     Args:
-        encrypted: Dict from password_encrypt, or hex string (legacy/web format)
+        encrypted: Dict from password_encrypt with encryption parameters
         password: The password used for encryption
 
     Returns:
@@ -419,22 +415,13 @@ def password_decrypt(encrypted: dict[str, Any] | str, password: str) -> bytes:
     from cryptography.hazmat.primitives.ciphers.aead import AESGCM
     from cryptography.exceptions import InvalidTag
 
-    # Handle both formats
-    if isinstance(encrypted, str):
-        # Legacy hex format: salt (16) + iv (12) + ciphertext
-        data = bytes.fromhex(encrypted)
-        salt = data[:16]
-        iv = data[16:28]
-        ciphertext = data[28:]
-        iterations = 100000
-    else:
-        # New explicit format
-        if encrypted.get("v", 1) != 1:
-            raise ValueError(f"Unsupported encryption version: {encrypted.get('v')}")
-        salt = bytes.fromhex(encrypted["salt"])
-        iv = bytes.fromhex(encrypted["iv"])
-        ciphertext = bytes.fromhex(encrypted["ciphertext"])
-        iterations = encrypted.get("kdf_iterations", 100000)
+    if encrypted.get("v") != 1:
+        raise ValueError(f"Unsupported encryption version: {encrypted.get('v')}")
+
+    salt = bytes.fromhex(encrypted["salt"])
+    iv = bytes.fromhex(encrypted["iv"])
+    ciphertext = bytes.fromhex(encrypted["ciphertext"])
+    iterations = encrypted["kdf_iterations"]
 
     # Derive key from password using PBKDF2
     kdf = PBKDF2HMAC(
