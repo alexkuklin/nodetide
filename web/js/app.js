@@ -9,6 +9,34 @@
   // Version injected at build time (replaced by Dockerfile)
   const WEB_VERSION = '__GIT_COMMIT__';
 
+  // Set version info immediately (independent of Alpine)
+  window.DISTRIBLOG_VERSION = {
+    web: (typeof WEB_VERSION === 'string' && !WEB_VERSION.startsWith('__')) ? WEB_VERSION.slice(0, 7) : 'dev',
+    api: null
+  };
+
+  // Fetch API version immediately
+  fetch('/health')
+    .then(r => r.json())
+    .then(data => {
+      window.DISTRIBLOG_VERSION.api = data.commit?.slice(0, 7) || 'unknown';
+      updateVersionDisplay();
+    })
+    .catch(() => {
+      window.DISTRIBLOG_VERSION.api = 'offline';
+      updateVersionDisplay();
+    });
+
+  function updateVersionDisplay() {
+    const el = document.getElementById('version-display');
+    if (el) {
+      el.textContent = `(web:${window.DISTRIBLOG_VERSION.web} api:${window.DISTRIBLOG_VERSION.api || '...'})`;
+    }
+  }
+
+  // Update on page show (handles bfcache)
+  window.addEventListener('pageshow', updateVersionDisplay);
+
   // ============================================
   // CRYPTO MODULE
   // ============================================
@@ -457,22 +485,11 @@
       loading: false,
       error: null,
       success: null,
-      webVersion: (typeof WEB_VERSION === 'string' && !WEB_VERSION.startsWith('__')) ? WEB_VERSION : 'dev',
-      apiVersion: null,
 
-      async init() {
+      init() {
         this.initialized = true;
         window.addEventListener('online', () => this.online = true);
         window.addEventListener('offline', () => this.online = false);
-
-        // Fetch API version info
-        try {
-          const resp = await fetch('/health');
-          const data = await resp.json();
-          this.apiVersion = data.commit;
-        } catch (e) {
-          console.warn('Failed to fetch version:', e);
-        }
       },
 
       setView(view) {
