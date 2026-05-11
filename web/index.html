@@ -426,7 +426,7 @@
   <!-- Header -->
   <header>
     <div class="container flex flex-between">
-      <h1>Distriblog <span class="text-small text-muted" x-text="'(web:' + $store.app.webVersion?.slice(0, 7) + ($store.app.apiVersion ? ' api:' + $store.app.apiVersion?.slice(0, 7) : '') + ')'"></span></h1>
+      <h1>Distriblog <span class="text-small text-muted" x-show="$store.app.webVersion" x-text="'(web:' + ($store.app.webVersion || '').slice(0, 7) + ($store.app.apiVersion ? ' api:' + $store.app.apiVersion.slice(0, 7) : '') + ')'"></span></h1>
       <div>
         <span class="text-small text-muted" x-show="$store.identity.activeIdentity">
           <span class="status-dot" :class="$store.identity.isUnlocked($store.identity.activeHash) ? 'status-unlocked' : 'status-locked'"></span>

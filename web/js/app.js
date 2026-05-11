@@ -457,7 +457,7 @@
       loading: false,
       error: null,
       success: null,
-      webVersion: WEB_VERSION.startsWith('__') ? 'dev' : WEB_VERSION,
+      webVersion: (typeof WEB_VERSION === 'string' && !WEB_VERSION.startsWith('__')) ? WEB_VERSION : 'dev',
       apiVersion: null,
 
       async init() {
