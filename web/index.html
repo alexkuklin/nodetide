@@ -680,6 +680,23 @@
           </div>
 
           <div class="card">
+            <div class="card-header flex flex-between">
+              <span class="card-title">Distribution Points</span>
+              <button class="btn btn-small btn-secondary" @click="openDistributionModal">Edit</button>
+            </div>
+            <template x-if="distributionPoints.length === 0">
+              <p class="text-muted">No distribution points configured.</p>
+            </template>
+            <template x-if="distributionPoints.length > 0">
+              <div>
+                <template x-for="point in distributionPoints">
+                  <div class="identity-hash" style="word-break: break-all; margin-bottom: 0.25rem" x-text="point"></div>
+                </template>
+              </div>
+            </template>
+          </div>
+
+          <div class="card">
             <div class="card-header">
               <span class="card-title">Devices (<span x-text="activeDevices.length"></span>)</span>
             </div>
@@ -720,6 +737,36 @@
           </div>
         </div>
       </template>
+
+      <!-- Distribution Points Modal -->
+      <div class="modal-backdrop" x-show="showDistributionModal" x-cloak @click.self="showDistributionModal = false">
+        <div class="modal">
+          <div class="modal-header">
+            <span class="modal-title">Edit Distribution Points</span>
+            <button class="modal-close" @click="showDistributionModal = false">&times;</button>
+          </div>
+
+          <p class="text-small text-muted mb-1">
+            Distribution points are URIs where this identity can be reached. One per line.
+          </p>
+
+          <form @submit.prevent="saveDistributionPoints">
+            <div class="form-group">
+              <label>Distribution Points</label>
+              <textarea x-model="editDistributionPoints" rows="5"
+                        placeholder="https://relay.example.com/users/me&#10;mailto:me@example.com&#10;dtn://node.local:4556"></textarea>
+            </div>
+
+            <div class="flex gap-1">
+              <button type="button" class="btn btn-secondary" @click="showDistributionModal = false">Cancel</button>
+              <button type="submit" class="btn" :disabled="$store.app.loading">
+                <span x-show="!$store.app.loading">Save</span>
+                <span x-show="$store.app.loading">Saving...</span>
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
     </div>
 
     <!-- Trust view -->

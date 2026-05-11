@@ -106,6 +106,10 @@
       return nacl.sign.detached.verify(messageBytes, signature, publicKey);
     },
 
+    async sha256Hex(data) {
+      return sha256(data);
+    },
+
     // Encryption parameters (must match Python ENCRYPTION_V1)
     ENCRYPTION_V1: {
       version: 1,
@@ -462,6 +466,30 @@
     async getTrustAssertions(identityHash) {
       return this.request('GET', `/trust/assertions?target=${identityHash}`);
     },
+
+    async submitEvent(identityHash, event) {
+      return this.request('POST', `/identities/${identityHash}/events`, { event });
+    },
+
+    createSetDistributionEvent(keyPair, prevHash, distributionPoints) {
+      const timestamp = Math.floor(Date.now() / 1000);
+      const event = {
+        version: 1,
+        type: 'set_distribution',
+        alg: 'ed25519',
+        hash_alg: 'sha256',
+        timestamp,
+        prev: prevHash,
+        signed_by: encodeHex(keyPair.signingKeyPair.publicKey),
+        distribution_points: distributionPoints,
+      };
+      // Sign the event
+      const signable = JSON.stringify(event, Object.keys(event).sort());
+      const signableBytes = new TextEncoder().encode(signable);
+      const signature = nacl.sign.detached(signableBytes, keyPair.signingKeyPair.secretKey);
+      event.signature = encodeHex(signature);
+      return event;
+    },
   };
 
   // ============================================
@@ -668,8 +696,11 @@
       sigchain: [],
       devices: [],
       recovery: null,
+      distributionPoints: [],
       loading: false,
       lastLoadedHash: null,
+      showDistributionModal: false,
+      editDistributionPoints: '',
 
       // Use store for identity
       get identity() { return Alpine.store('identity').activeIdentity; },
@@ -712,14 +743,84 @@
           this.sigchain = data.sigchain || [];
           this.devices = data.devices || [];
           this.recovery = data.recovery || null;
+          this.distributionPoints = this.extractDistributionPoints(this.sigchain);
         } catch (e) {
           console.warn('Failed to load identity from API:', e);
           this.sigchain = [];
           this.devices = [];
           this.recovery = null;
+          this.distributionPoints = [];
         } finally {
           this.loading = false;
         }
+      },
+
+      extractDistributionPoints(sigchain) {
+        let points = [];
+        for (const event of sigchain) {
+          if (event.type === 'genesis' && event.distribution_points) {
+            points = event.distribution_points;
+          } else if (event.type === 'set_distribution') {
+            points = event.distribution_points;
+          }
+        }
+        return points;
+      },
+
+      openDistributionModal() {
+        const activeHash = Alpine.store('identity').activeHash;
+        if (!SessionKeys.isUnlocked(activeHash)) {
+          Alpine.store('app').showError('Identity must be unlocked first');
+          return;
+        }
+        this.editDistributionPoints = this.distributionPoints.join('\n');
+        this.showDistributionModal = true;
+      },
+
+      async saveDistributionPoints() {
+        const activeHash = Alpine.store('identity').activeHash;
+        const keyPair = SessionKeys.get(activeHash);
+        if (!keyPair) {
+          Alpine.store('app').showError('Identity must be unlocked');
+          return;
+        }
+
+        const points = this.editDistributionPoints
+          .split(/[\n,]/)
+          .map(s => s.trim())
+          .filter(s => s);
+
+        // Get prev hash (last event in sigchain)
+        const prevHash = this.sigchain.length > 0
+          ? await this.getEventHash(this.sigchain[this.sigchain.length - 1])
+          : null;
+
+        if (!prevHash) {
+          Alpine.store('app').showError('Cannot determine sigchain head');
+          return;
+        }
+
+        Alpine.store('app').loading = true;
+
+        try {
+          const event = api.createSetDistributionEvent(keyPair, prevHash, points);
+          await api.submitEvent(activeHash, event);
+
+          this.distributionPoints = points;
+          this.sigchain.push(event);
+          this.showDistributionModal = false;
+          Alpine.store('app').showSuccess('Distribution points updated');
+        } catch (e) {
+          Alpine.store('app').showError('Failed to update: ' + e.message);
+        } finally {
+          Alpine.store('app').loading = false;
+        }
+      },
+
+      async getEventHash(event) {
+        // Compute SHA-256 hash of canonical JSON
+        const canonical = JSON.stringify(event, Object.keys(event).sort());
+        return await Crypto.sha256Hex(canonical);
       },
 
       get activeDevices() { return this.devices; },
