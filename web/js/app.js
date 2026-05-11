@@ -75,6 +75,14 @@
       return nacl.sign.detached.verify(messageBytes, signature, publicKey);
     },
 
+    // Encryption parameters (must match Python ENCRYPTION_V1)
+    ENCRYPTION_V1: {
+      version: 1,
+      kdf: 'pbkdf2-sha256',
+      kdf_iterations: 100000,
+      cipher: 'aes-256-gcm',
+    },
+
     async encryptWithPassword(data, password) {
       const encoder = new TextEncoder();
       const salt = crypto.getRandomValues(new Uint8Array(16));
@@ -85,38 +93,57 @@
       );
 
       const key = await crypto.subtle.deriveKey(
-        { name: 'PBKDF2', salt, iterations: 100000, hash: 'SHA-256' },
+        { name: 'PBKDF2', salt, iterations: this.ENCRYPTION_V1.kdf_iterations, hash: 'SHA-256' },
         keyMaterial,
         { name: 'AES-GCM', length: 256 },
         false,
         ['encrypt']
       );
 
-      const dataBytes = encoder.encode(JSON.stringify(data));
+      const dataBytes = encoder.encode(typeof data === 'string' ? data : JSON.stringify(data));
       const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, dataBytes);
 
-      const result = new Uint8Array(salt.length + iv.length + ciphertext.byteLength);
-      result.set(salt, 0);
-      result.set(iv, salt.length);
-      result.set(new Uint8Array(ciphertext), salt.length + iv.length);
-
-      return encodeHex(result);
+      // Return explicit format with all parameters
+      return {
+        v: this.ENCRYPTION_V1.version,
+        kdf: this.ENCRYPTION_V1.kdf,
+        kdf_iterations: this.ENCRYPTION_V1.kdf_iterations,
+        cipher: this.ENCRYPTION_V1.cipher,
+        salt: encodeHex(salt),
+        iv: encodeHex(iv),
+        ciphertext: encodeHex(new Uint8Array(ciphertext)),
+      };
     },
 
-    async decryptWithPassword(encryptedHex, password) {
+    async decryptWithPassword(encrypted, password) {
       const encoder = new TextEncoder();
-      const data = decodeHex(encryptedHex);
 
-      const salt = data.slice(0, 16);
-      const iv = data.slice(16, 28);
-      const ciphertext = data.slice(28);
+      // Handle both formats: explicit object or legacy hex string
+      let salt, iv, ciphertext, iterations;
+      if (typeof encrypted === 'string') {
+        // Legacy hex format: salt (16) + iv (12) + ciphertext
+        const data = decodeHex(encrypted);
+        salt = data.slice(0, 16);
+        iv = data.slice(16, 28);
+        ciphertext = data.slice(28);
+        iterations = 100000;
+      } else {
+        // Explicit format
+        if (encrypted.v && encrypted.v !== 1) {
+          throw new Error(`Unsupported encryption version: ${encrypted.v}`);
+        }
+        salt = decodeHex(encrypted.salt);
+        iv = decodeHex(encrypted.iv);
+        ciphertext = decodeHex(encrypted.ciphertext);
+        iterations = encrypted.kdf_iterations || 100000;
+      }
 
       const keyMaterial = await crypto.subtle.importKey(
         'raw', encoder.encode(password), 'PBKDF2', false, ['deriveBits', 'deriveKey']
       );
 
       const key = await crypto.subtle.deriveKey(
-        { name: 'PBKDF2', salt, iterations: 100000, hash: 'SHA-256' },
+        { name: 'PBKDF2', salt, iterations, hash: 'SHA-256' },
         keyMaterial,
         { name: 'AES-GCM', length: 256 },
         false,

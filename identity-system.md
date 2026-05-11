@@ -939,6 +939,76 @@ Potential dimensions:
 - Quality/accuracy
 - Safety (malicious content)
 
+## Identity Dump Format
+
+Portable backup format for identity with encrypted private keys. Compatible between CLI and web client.
+
+### Structure
+
+```json
+{
+  "version": 1,
+  "format": "distriblog-identity-dump",
+  "identity_hash": "<sha256 hash of genesis event>",
+  "sigchain": [<array of sigchain events>],
+  "encrypted_keys": {
+    "v": 1,
+    "kdf": "pbkdf2-sha256",
+    "kdf_iterations": 100000,
+    "cipher": "aes-256-gcm",
+    "salt": "<16 bytes hex>",
+    "iv": "<12 bytes hex>",
+    "ciphertext": "<encrypted keys + GCM tag, hex>"
+  }
+}
+```
+
+### Encryption Details
+
+| Parameter | Value |
+|-----------|-------|
+| KDF | PBKDF2 with SHA-256 |
+| KDF iterations | 100,000 |
+| Key length | 256 bits |
+| Cipher | AES-256-GCM |
+| Salt | 16 random bytes |
+| IV/Nonce | 12 random bytes |
+| Auth tag | 16 bytes (included in ciphertext) |
+
+### Decrypted Keys Format
+
+The `ciphertext` decrypts to JSON:
+
+```json
+{
+  "signing_key": "<ed25519 secret key, 64 bytes hex>",
+  "encryption_key": "<x25519 secret key, 32 bytes hex>"
+}
+```
+
+### Usage
+
+**CLI:**
+```bash
+# Dump (prompts for password)
+distriblog identity dump backup.json
+
+# Restore
+distriblog identity restore backup.json
+```
+
+**Web:**
+- Settings → "Dump Identity" (requires unlocked identity)
+- Settings → "Restore Identity"
+
+### Security Notes
+
+- Password-based encryption - security depends on password strength
+- 100k PBKDF2 iterations provides reasonable protection against brute force
+- Random salt prevents rainbow table attacks
+- AES-GCM provides authenticated encryption (integrity + confidentiality)
+- Store dump files securely - they contain encrypted private keys
+
 ## Related Systems
 
 | System | Approach |

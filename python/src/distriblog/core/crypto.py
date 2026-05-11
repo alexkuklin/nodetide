@@ -348,27 +348,37 @@ def symmetric_decrypt(ciphertext: bytes, key: bytes) -> bytes:
     return box.decrypt(ciphertext)
 
 
-def password_encrypt(plaintext: bytes, password: str) -> str:
+ENCRYPTION_V1 = {
+    "version": 1,
+    "kdf": "pbkdf2-sha256",
+    "kdf_iterations": 100000,
+    "cipher": "aes-256-gcm",
+    "salt_bytes": 16,
+    "iv_bytes": 12,
+}
+
+
+def password_encrypt(plaintext: bytes, password: str) -> dict[str, Any]:
     """Encrypt data with a password using PBKDF2 + AES-256-GCM.
 
     This format is compatible with the web client's Crypto.encryptWithPassword.
 
-    Returns hex-encoded string: salt (16 bytes) + iv (12 bytes) + ciphertext.
+    Returns a dict with encryption parameters and ciphertext for explicit format.
     """
     from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
     from cryptography.hazmat.primitives import hashes
     from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
     # Generate random salt and IV
-    salt = random_bytes(16)
-    iv = random_bytes(12)
+    salt = random_bytes(ENCRYPTION_V1["salt_bytes"])
+    iv = random_bytes(ENCRYPTION_V1["iv_bytes"])
 
-    # Derive key from password using PBKDF2 (same params as web client)
+    # Derive key from password using PBKDF2
     kdf = PBKDF2HMAC(
         algorithm=hashes.SHA256(),
         length=32,  # 256 bits for AES-256
         salt=salt,
-        iterations=100000,
+        iterations=ENCRYPTION_V1["kdf_iterations"],
     )
     key = kdf.derive(password.encode("utf-8"))
 
@@ -376,18 +386,26 @@ def password_encrypt(plaintext: bytes, password: str) -> str:
     aesgcm = AESGCM(key)
     ciphertext = aesgcm.encrypt(iv, plaintext, None)
 
-    # Concatenate: salt + iv + ciphertext
-    result = salt + iv + ciphertext
-    return result.hex()
+    return {
+        "v": ENCRYPTION_V1["version"],
+        "kdf": ENCRYPTION_V1["kdf"],
+        "kdf_iterations": ENCRYPTION_V1["kdf_iterations"],
+        "cipher": ENCRYPTION_V1["cipher"],
+        "salt": salt.hex(),
+        "iv": iv.hex(),
+        "ciphertext": ciphertext.hex(),
+    }
 
 
-def password_decrypt(encrypted_hex: str, password: str) -> bytes:
+def password_decrypt(encrypted: dict[str, Any] | str, password: str) -> bytes:
     """Decrypt data encrypted with password_encrypt.
 
-    This format is compatible with the web client's Crypto.decryptWithPassword.
+    Supports both:
+    - New format: dict with explicit encryption parameters
+    - Legacy format: hex string (salt + iv + ciphertext) for web client compatibility
 
     Args:
-        encrypted_hex: Hex string from password_encrypt (salt + iv + ciphertext)
+        encrypted: Dict from password_encrypt, or hex string (legacy/web format)
         password: The password used for encryption
 
     Returns:
@@ -401,19 +419,29 @@ def password_decrypt(encrypted_hex: str, password: str) -> bytes:
     from cryptography.hazmat.primitives.ciphers.aead import AESGCM
     from cryptography.exceptions import InvalidTag
 
-    data = bytes.fromhex(encrypted_hex)
-
-    # Extract salt, iv, ciphertext
-    salt = data[:16]
-    iv = data[16:28]
-    ciphertext = data[28:]
+    # Handle both formats
+    if isinstance(encrypted, str):
+        # Legacy hex format: salt (16) + iv (12) + ciphertext
+        data = bytes.fromhex(encrypted)
+        salt = data[:16]
+        iv = data[16:28]
+        ciphertext = data[28:]
+        iterations = 100000
+    else:
+        # New explicit format
+        if encrypted.get("v", 1) != 1:
+            raise ValueError(f"Unsupported encryption version: {encrypted.get('v')}")
+        salt = bytes.fromhex(encrypted["salt"])
+        iv = bytes.fromhex(encrypted["iv"])
+        ciphertext = bytes.fromhex(encrypted["ciphertext"])
+        iterations = encrypted.get("kdf_iterations", 100000)
 
     # Derive key from password using PBKDF2
     kdf = PBKDF2HMAC(
         algorithm=hashes.SHA256(),
         length=32,
         salt=salt,
-        iterations=100000,
+        iterations=iterations,
     )
     key = kdf.derive(password.encode("utf-8"))
 
