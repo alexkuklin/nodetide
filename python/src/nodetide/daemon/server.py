@@ -12,11 +12,11 @@ from typing import Any
 
 from aiohttp import web
 
-from distriblog.core.identity import Identity, Sigchain
-from distriblog.core.storage import Storage
-from distriblog.transport.bundle import Bundle, BundleType, BundleQueue
-from distriblog.transport.cla.base import PeerInfo
-from distriblog.transport.cla.tcp_mdns import TcpMdnsCLA, TcpMdnsConfig
+from nodetide.core.identity import Identity, Sigchain
+from nodetide.core.storage import Storage
+from nodetide.transport.bundle import Bundle, BundleType, BundleQueue
+from nodetide.transport.cla.base import PeerInfo
+from nodetide.transport.cla.tcp_mdns import TcpMdnsCLA, TcpMdnsConfig
 
 
 logging.basicConfig(level=logging.INFO)

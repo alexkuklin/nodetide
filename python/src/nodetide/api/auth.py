@@ -11,8 +11,8 @@ from typing import Any
 
 import logging
 
-from distriblog.core.crypto import VerifyKey, hash_hex
-from distriblog.core.identity import Sigchain, DeviceCapability
+from nodetide.core.crypto import VerifyKey, hash_hex
+from nodetide.core.identity import Sigchain, DeviceCapability
 
 logger = logging.getLogger(__name__)
 

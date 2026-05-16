@@ -1,5 +1,5 @@
 /**
- * Distriblog Web Client
+ * Nodetide Web Client
  * Single-file version (no ES modules for browser compatibility)
  */
 
@@ -10,7 +10,7 @@
   const WEB_VERSION = '__GIT_COMMIT__';
 
   // Set version info immediately (independent of Alpine)
-  window.DISTRIBLOG_VERSION = {
+  window.NODETIDE_VERSION = {
     web: (typeof WEB_VERSION === 'string' && !WEB_VERSION.startsWith('__')) ? WEB_VERSION.slice(0, 7) : 'dev',
     api: null
   };
@@ -19,18 +19,18 @@
   fetch('/health')
     .then(r => r.json())
     .then(data => {
-      window.DISTRIBLOG_VERSION.api = data.commit?.slice(0, 7) || 'unknown';
+      window.NODETIDE_VERSION.api = data.commit?.slice(0, 7) || 'unknown';
       updateVersionDisplay();
     })
     .catch(() => {
-      window.DISTRIBLOG_VERSION.api = 'offline';
+      window.NODETIDE_VERSION.api = 'offline';
       updateVersionDisplay();
     });
 
   function updateVersionDisplay() {
     const el = document.getElementById('version-display');
     if (el) {
-      el.textContent = `(web:${window.DISTRIBLOG_VERSION.web} api:${window.DISTRIBLOG_VERSION.api || '...'})`;
+      el.textContent = `(web:${window.NODETIDE_VERSION.web} api:${window.NODETIDE_VERSION.api || '...'})`;
     }
   }
 
@@ -185,9 +185,9 @@
   // ============================================
 
   const STORAGE_KEYS = {
-    IDENTITIES: 'distriblog_identities',
-    ACTIVE_IDENTITY: 'distriblog_active_identity',
-    SETTINGS: 'distriblog_settings',
+    IDENTITIES: 'nodetide_identities',
+    ACTIVE_IDENTITY: 'nodetide_active_identity',
+    SETTINGS: 'nodetide_settings',
   };
 
   const StorageMethod = { PASSWORD: 'password', WEBAUTHN: 'webauthn' };
@@ -294,7 +294,7 @@
       // Create dump
       return {
         version: 1,
-        format: 'distriblog-identity-dump',
+        format: 'nodetide-identity-dump',
         identity_hash: identityHash,
         sigchain: sigchain,
         encrypted_keys: encryptedKeys,
@@ -308,7 +308,7 @@
        * @param password - Password used to encrypt the dump
        * @param localPassword - Password to use for local storage
        */
-      if (dump.format !== 'distriblog-identity-dump') {
+      if (dump.format !== 'nodetide-identity-dump') {
         throw new Error('Invalid dump format');
       }
 
@@ -497,7 +497,7 @@
   // ============================================
 
   function createIdentityQR(identityHash) {
-    return `distriblog:id:${identityHash}`;
+    return `nodetide:id:${identityHash}`;
   }
 
   // ============================================
@@ -922,7 +922,7 @@
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = `distriblog-backup-${Date.now()}.json`;
+        a.download = `nodetide-backup-${Date.now()}.json`;
         a.click();
         URL.revokeObjectURL(url);
       },

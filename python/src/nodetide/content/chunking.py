@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator
 
-from distriblog.core.crypto import hash_bytes, hash_hex
+from nodetide.core.crypto import hash_bytes, hash_hex
 
 DEFAULT_CHUNK_SIZE = 64 * 1024  # 64KB default
 

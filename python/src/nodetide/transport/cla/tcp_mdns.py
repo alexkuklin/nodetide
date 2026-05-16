@@ -13,13 +13,13 @@ from typing import AsyncIterator, Callable, Awaitable
 from zeroconf import ServiceBrowser, ServiceInfo, ServiceListener, Zeroconf
 from zeroconf.asyncio import AsyncZeroconf
 
-from distriblog.transport.bundle import Bundle
-from distriblog.transport.cla.base import CLA, CLAConfig, PeerInfo
+from nodetide.transport.bundle import Bundle
+from nodetide.transport.cla.base import CLA, CLAConfig, PeerInfo
 
 
 logger = logging.getLogger(__name__)
 
-SERVICE_TYPE = "_distriblog._tcp.local."
+SERVICE_TYPE = "_nodetide._tcp.local."
 DEFAULT_PORT = 4556
 
 
@@ -116,7 +116,7 @@ class TcpMdnsCLA(CLA):
 
         if self.config.announce:
             # Register our service
-            service_name = self.config.service_name or f"distriblog-{self.node_identity[:8]}"
+            service_name = self.config.service_name or f"nodetide-{self.node_identity[:8]}"
             self._service_info = ServiceInfo(
                 SERVICE_TYPE,
                 f"{service_name}.{SERVICE_TYPE}",

@@ -16,7 +16,7 @@ on:
 
 env:
   AWS_REGION: us-east-1
-  ECR_REPOSITORY: distriblog
+  ECR_REPOSITORY: nodetide
 
 permissions:
   id-token: write
@@ -44,7 +44,7 @@ jobs:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/distriblog-github-actions
+          role-to-assume: arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/nodetide-github-actions
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Login to Amazon ECR
@@ -101,10 +101,10 @@ jobs:
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: dblog.kuklin.eu
-          username: deploy-distriblog
+          username: deploy-nodetide
           key: ${{ secrets.VPS_SSH_KEY }}
           script: |
-            sudo /usr/local/bin/deploy-distriblog-wrapper.sh python
+            sudo /usr/local/bin/deploy-nodetide-wrapper.sh python
 
   deploy-golang:
     needs: build
@@ -115,7 +115,7 @@ jobs:
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: dblog.kuklin.eu
-          username: deploy-distriblog
+          username: deploy-nodetide
           key: ${{ secrets.VPS_SSH_KEY }}
           script: |
-            sudo /usr/local/bin/deploy-distriblog-wrapper.sh golang
+            sudo /usr/local/bin/deploy-nodetide-wrapper.sh golang

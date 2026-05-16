@@ -6,7 +6,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import AsyncIterator, Callable, Awaitable
 
-from distriblog.transport.bundle import Bundle
+from nodetide.transport.bundle import Bundle
 
 
 @dataclass

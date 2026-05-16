@@ -2,8 +2,8 @@
 
 import pytest
 
-from distriblog.core.crypto import KeyPair
-from distriblog.core.identity import (
+from nodetide.core.crypto import KeyPair
+from nodetide.core.identity import (
     Identity,
     IdentityType,
     Sigchain,

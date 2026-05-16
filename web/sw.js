@@ -1,8 +1,8 @@
 /**
- * Service Worker - offline support for Distriblog web client
+ * Service Worker - offline support for Nodetide web client
  */
 
-const CACHE_NAME = 'distriblog-v4';
+const CACHE_NAME = 'nodetide-v4';
 const STATIC_ASSETS = [
   '/',
   '/index.html',
@@ -149,7 +149,7 @@ self.addEventListener('push', (event) => {
   const data = event.data.json();
 
   event.waitUntil(
-    self.registration.showNotification(data.title || 'Distriblog', {
+    self.registration.showNotification(data.title || 'Nodetide', {
       body: data.body,
       icon: '/icon-192.png',
       badge: '/badge-72.png',

@@ -12,8 +12,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator
 
-from distriblog.core.crypto import KeyPair
-from distriblog.core.identity import Identity, Sigchain
+from nodetide.core.crypto import KeyPair
+from nodetide.core.identity import Identity, Sigchain
 
 
 SCHEMA_VERSION = 1

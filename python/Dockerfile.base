@@ -1,7 +1,7 @@
-# Distriblog Python Base Image
+# Nodetide Python Base Image
 # Pre-installs all dependencies for faster builds
 #
-# Build: docker build -f python/Dockerfile.base -t distriblog-python-base .
+# Build: docker build -f python/Dockerfile.base -t nodetide-python-base .
 # This image should be rebuilt when dependencies change in pyproject.toml
 
 FROM python:3.11-slim
@@ -31,7 +31,7 @@ RUN pip install --no-cache-dir \
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libffi8 \
     && rm -rf /var/lib/apt/lists/* \
-    && useradd --create-home --shell /bin/bash distriblog
+    && useradd --create-home --shell /bin/bash nodetide
 
 # Create data directory
-RUN mkdir -p /data && chown distriblog:distriblog /data
+RUN mkdir -p /data && chown nodetide:nodetide /data

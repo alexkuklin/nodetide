@@ -8,8 +8,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from distriblog.core.crypto import KeyPair, hash_bytes, hash_hex, hash_json
-from distriblog.content.chunking import (
+from nodetide.core.crypto import KeyPair, hash_bytes, hash_hex, hash_json
+from nodetide.content.chunking import (
     Chunk,
     chunk_file,
     chunk_bytes,

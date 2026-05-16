@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
-from distriblog.core.crypto import (
+from nodetide.core.crypto import (
     KeyPair,
     VerifyKey,
     PublicKeyBundle,

@@ -11,15 +11,15 @@ from aiohttp import web
 
 logger = logging.getLogger(__name__)
 
-from distriblog.core.identity import (
+from nodetide.core.identity import (
     Sigchain,
     SigchainEvent,
     GenesisEvent,
     SocialRecoveryEvent,
 )
-from distriblog.core.storage import Storage
-from distriblog.core.trust import TrustGraph, IdentityAssertion, TrustDelegation
-from distriblog.api.models import (
+from nodetide.core.storage import Storage
+from nodetide.core.trust import TrustGraph, IdentityAssertion, TrustDelegation
+from nodetide.api.models import (
     APIError,
     ErrorCode,
     CreateIdentityResponse,
@@ -31,7 +31,7 @@ from distriblog.api.models import (
     TrustCalculationResponse,
     VerifyResponse,
 )
-from distriblog.api.auth import (
+from nodetide.api.auth import (
     SessionStore,
     RecoveryStore,
     verify_event_signature,

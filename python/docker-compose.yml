@@ -1,18 +1,18 @@
 version: '3.8'
 
 services:
-  distriblog:
+  nodetide:
     build: .
-    container_name: distriblog
+    container_name: nodetide
     ports:
       - "4557:4557"
     volumes:
-      - distriblog-data:/data
+      - nodetide-data:/data
     environment:
-      - DISTRIBLOG_HOST=0.0.0.0
-      - DISTRIBLOG_PORT=4557
-      - DISTRIBLOG_DB_PATH=/data/distriblog.db
-      - DISTRIBLOG_WEB_ROOT=/app/web
+      - NODETIDE_HOST=0.0.0.0
+      - NODETIDE_PORT=4557
+      - NODETIDE_DB_PATH=/data/nodetide.db
+      - NODETIDE_WEB_ROOT=/app/web
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:4557/health')"]
@@ -22,5 +22,5 @@ services:
       start_period: 5s
 
 volumes:
-  distriblog-data:
+  nodetide-data:
     driver: local

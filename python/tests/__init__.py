@@ -1,1 +1,1 @@
-"""Tests for distriblog."""
+"""Tests for nodetide."""

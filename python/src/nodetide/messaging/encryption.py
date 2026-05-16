@@ -7,7 +7,7 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
-from distriblog.core.crypto import (
+from nodetide.core.crypto import (
     KeyPair,
     EncryptionPublicKey,
     EncryptionPrivateKey,
@@ -16,8 +16,8 @@ from distriblog.core.crypto import (
     random_bytes,
     hash_hex,
 )
-from distriblog.core.identity import Identity, Sigchain
-from distriblog.messaging.message import (
+from nodetide.core.identity import Identity, Sigchain
+from nodetide.messaging.message import (
     PrivateMessage,
     GroupMessage,
     GroupEncryptionMode,

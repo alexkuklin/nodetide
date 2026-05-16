@@ -143,11 +143,11 @@ Email provides a ubiquitous, delay-tolerant transport layer. Messages are encode
 ```
 From: sender@example.com
 To: recipient@example.com
-Subject: [DISTRIBLOG] <message-type> <message-id-short>
+Subject: [NODETIDE] <message-type> <message-id-short>
 Content-Type: application/json; charset=utf-8
-X-Distriblog-Version: 1
-X-Distriblog-Type: <bundle-type>
-X-Distriblog-Sender: <sender-identity-hash>
+X-Nodetide-Version: 1
+X-Nodetide-Type: <bundle-type>
+X-Nodetide-Sender: <sender-identity-hash>
 
 <JSON-encoded bundle>
 ```
@@ -156,12 +156,12 @@ X-Distriblog-Sender: <sender-identity-hash>
 ```
 From: recipient@example.com
 To: sender@example.com
-Subject: Re: [DISTRIBLOG] <message-type> <message-id-short>
+Subject: Re: [NODETIDE] <message-type> <message-id-short>
 Content-Type: application/json; charset=utf-8
 In-Reply-To: <original-message-id>
-X-Distriblog-Version: 1
-X-Distriblog-Type: ack
-X-Distriblog-Sender: <recipient-identity-hash>
+X-Nodetide-Version: 1
+X-Nodetide-Type: ack
+X-Nodetide-Sender: <recipient-identity-hash>
 
 <JSON-encoded response/ack>
 ```
@@ -169,10 +169,10 @@ X-Distriblog-Sender: <recipient-identity-hash>
 **Message Types in Subject:**
 | Type | Subject Example |
 |------|-----------------|
-| Sigchain sync | `[DISTRIBLOG] sigchain 7f3a8b` |
-| Private message | `[DISTRIBLOG] message a2c4d6` |
-| Delivery ack | `[DISTRIBLOG] ack b3e5f7` |
-| Revocation | `[DISTRIBLOG] revocation c4f6g8` |
+| Sigchain sync | `[NODETIDE] sigchain 7f3a8b` |
+| Private message | `[NODETIDE] message a2c4d6` |
+| Delivery ack | `[NODETIDE] ack b3e5f7` |
+| Revocation | `[NODETIDE] revocation c4f6g8` |
 
 **Large Content:**
 
@@ -185,7 +185,7 @@ For content exceeding email size limits (~25MB typical):
 - Email transport is public - always encrypt sensitive content at message layer
 - SPF/DKIM/DMARC help prevent spoofing but don't replace signature verification
 - Email metadata (sender, recipient, timestamps) is visible to mail servers
-- Consider using dedicated email addresses for distriblog traffic
+- Consider using dedicated email addresses for nodetide traffic
 
 ### Resolution
 
@@ -1066,7 +1066,7 @@ Portable backup format for identity with encrypted private keys. Compatible betw
 ```json
 {
   "version": 1,
-  "format": "distriblog-identity-dump",
+  "format": "nodetide-identity-dump",
   "identity_hash": "<sha256 hash of genesis event>",
   "sigchain": [<array of sigchain events>],
   "encrypted_keys": {
@@ -1109,10 +1109,10 @@ The `ciphertext` decrypts to JSON:
 **CLI:**
 ```bash
 # Dump (prompts for password)
-distriblog identity dump backup.json
+nodetide identity dump backup.json
 
 # Restore
-distriblog identity restore backup.json
+nodetide identity restore backup.json
 ```
 
 **Web:**

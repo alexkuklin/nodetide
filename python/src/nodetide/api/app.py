@@ -9,9 +9,9 @@ from pathlib import Path
 
 from aiohttp import web
 
-from distriblog.core.storage import Storage
-from distriblog.api.routes import setup_routes
-from distriblog.api.auth import SessionStore, RecoveryStore
+from nodetide.core.storage import Storage
+from nodetide.api.routes import setup_routes
+from nodetide.api.auth import SessionStore, RecoveryStore
 
 
 logger = logging.getLogger(__name__)
@@ -21,7 +21,7 @@ async def health_handler(request: web.Request) -> web.Response:
     """Health check endpoint."""
     return web.json_response({
         "status": "healthy",
-        "service": "distriblog",
+        "service": "nodetide",
         "commit": os.environ.get("GIT_COMMIT", "dev"),
     })
 
@@ -86,12 +86,12 @@ def create_app(
         app["storage"] = Storage.open(Path(db_path))
     else:
         # Check environment variable or use default
-        env_db_path = os.environ.get("DISTRIBLOG_DB_PATH")
+        env_db_path = os.environ.get("NODETIDE_DB_PATH")
         if env_db_path:
             app["storage"] = Storage.open(Path(env_db_path))
         else:
-            data_dir = Path.home() / ".distriblog"
-            app["storage"] = Storage.open(data_dir / "distriblog.db")
+            data_dir = Path.home() / ".nodetide"
+            app["storage"] = Storage.open(data_dir / "nodetide.db")
 
     # Setup stores
     app["session_store"] = SessionStore()
@@ -123,7 +123,7 @@ def create_app(
     app.middlewares.append(cors_middleware)
 
     # Setup static file serving for web client
-    resolved_web_root = web_root or os.environ.get("DISTRIBLOG_WEB_ROOT")
+    resolved_web_root = web_root or os.environ.get("NODETIDE_WEB_ROOT")
     if resolved_web_root:
         web_path = Path(resolved_web_root)
         if web_path.exists():

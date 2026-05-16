@@ -15,7 +15,7 @@ on:
 
 env:
   AWS_REGION: us-east-1
-  ECR_REPOSITORY: distriblog
+  ECR_REPOSITORY: nodetide
 
 permissions:
   id-token: write
@@ -31,7 +31,7 @@ jobs:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/distriblog-github-actions
+          role-to-assume: arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/nodetide-github-actions
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Login to Amazon ECR

@@ -2,7 +2,7 @@
 
 import pytest
 
-from distriblog.core.crypto import (
+from nodetide.core.crypto import (
     SigningKey,
     VerifyKey,
     EncryptionPrivateKey,

@@ -1,6 +1,6 @@
 {
-  "name": "Distriblog",
-  "short_name": "Distriblog",
+  "name": "Nodetide",
+  "short_name": "Nodetide",
   "description": "Distributed Identity System",
   "start_url": "/",
   "display": "standalone",

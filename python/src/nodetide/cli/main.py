@@ -1,4 +1,4 @@
-"""Command-line interface for distriblog."""
+"""Command-line interface for nodetide."""
 
 from __future__ import annotations
 
@@ -8,22 +8,22 @@ from pathlib import Path
 
 import click
 
-from distriblog.core.crypto import KeyPair
-from distriblog.core.identity import Identity, IdentityType, DeviceCapability
-from distriblog.core.storage import Storage
-from distriblog.core.trust import (
+from nodetide.core.crypto import KeyPair
+from nodetide.core.identity import Identity, IdentityType, DeviceCapability
+from nodetide.core.storage import Storage
+from nodetide.core.trust import (
     IdentityAssertion,
     TrustDelegation,
     TrustGraph,
     VerificationLevel,
 )
-from distriblog.content.mime import create_text_message
+from nodetide.content.mime import create_text_message
 
 
 def get_storage() -> Storage:
     """Get the default storage."""
-    data_dir = Path.home() / ".distriblog"
-    return Storage.open(data_dir / "distriblog.db")
+    data_dir = Path.home() / ".nodetide"
+    return Storage.open(data_dir / "nodetide.db")
 
 
 def get_default_identity(storage: Storage) -> Identity | None:
@@ -34,7 +34,7 @@ def get_default_identity(storage: Storage) -> Identity | None:
 @click.group()
 @click.version_option(version="0.1.0")
 def cli():
-    """Distriblog - Distributed identity and messaging."""
+    """Nodetide - Distributed identity and messaging."""
     pass
 
 
@@ -89,7 +89,7 @@ def identity_list():
     storage.close()
 
     if not identities:
-        click.echo("No identities found. Create one with: distriblog identity create")
+        click.echo("No identities found. Create one with: nodetide identity create")
         return
 
     for identity_hash in identities:
@@ -120,7 +120,7 @@ def identity_show(identity_hash: str | None):
     else:
         ident = get_default_identity(storage)
         if not ident:
-            click.echo("No default identity. Create one with: distriblog identity create")
+            click.echo("No default identity. Create one with: nodetide identity create")
             return
 
     storage.close()
@@ -164,7 +164,7 @@ def identity_add_device(label: str, expires: int | None):
     ident = get_default_identity(storage)
 
     if not ident:
-        click.echo("No default identity. Create one with: distriblog identity create")
+        click.echo("No default identity. Create one with: nodetide identity create")
         return
 
     device_keypair, event = ident.add_device(label=label, expires=expires)
@@ -187,7 +187,7 @@ def identity_revoke_device(device_pubkey: str, reason: str | None):
     ident = get_default_identity(storage)
 
     if not ident:
-        click.echo("No default identity. Create one with: distriblog identity create")
+        click.echo("No default identity. Create one with: nodetide identity create")
         return
 
     event = ident.revoke_device(device_pubkey, reason=reason)
@@ -207,13 +207,13 @@ def identity_set_distribution(distribution: tuple[str, ...]):
     This replaces all existing distribution points.
 
     Example:
-      distriblog identity set-distribution -d https://relay.example.com -d mailto:me@example.com
+      nodetide identity set-distribution -d https://relay.example.com -d mailto:me@example.com
     """
     storage = get_storage()
     ident = get_default_identity(storage)
 
     if not ident:
-        click.echo("No default identity. Create one with: distriblog identity create")
+        click.echo("No default identity. Create one with: nodetide identity create")
         return
 
     dist_points = list(distribution)
@@ -236,7 +236,7 @@ def identity_set_recovery(trustees: str, threshold: int):
     ident = get_default_identity(storage)
 
     if not ident:
-        click.echo("No default identity. Create one with: distriblog identity create")
+        click.echo("No default identity. Create one with: nodetide identity create")
         return
 
     trustee_list = [t.strip() for t in trustees.split(",")]
@@ -268,7 +268,7 @@ def identity_export(output_file: str):
     ident = get_default_identity(storage)
 
     if not ident:
-        click.echo("No default identity. Create one with: distriblog identity create")
+        click.echo("No default identity. Create one with: nodetide identity create")
         return
 
     storage.close()
@@ -283,7 +283,7 @@ def identity_export(output_file: str):
 @click.argument("input_file", type=click.Path(exists=True))
 def identity_import(input_file: str):
     """Import identity sigchain from file."""
-    from distriblog.core.identity import Sigchain
+    from nodetide.core.identity import Sigchain
 
     storage = get_storage()
 
@@ -348,13 +348,13 @@ def identity_dump(output_file: str, password: str):
 
     The dump format is compatible with the web client.
     """
-    from distriblog.core.crypto import password_encrypt
+    from nodetide.core.crypto import password_encrypt
 
     storage = get_storage()
     ident = get_default_identity(storage)
 
     if not ident:
-        click.echo("No default identity. Create one with: distriblog identity create")
+        click.echo("No default identity. Create one with: nodetide identity create")
         storage.close()
         return
 
@@ -372,7 +372,7 @@ def identity_dump(output_file: str, password: str):
     # Create the dump (format compatible with web client)
     dump = {
         "version": 1,
-        "format": "distriblog-identity-dump",
+        "format": "nodetide-identity-dump",
         "identity_hash": ident.identity_hash,
         "sigchain": ident.sigchain.to_list(),
         "encrypted_keys": encrypted_keys,  # hex string, PBKDF2+AES-GCM
@@ -397,8 +397,8 @@ def identity_restore(input_file: str, password: str, default: bool):
     Restores a complete identity including private keys from a dump file
     created with 'identity dump' or exported from the web client.
     """
-    from distriblog.core.crypto import password_decrypt
-    from distriblog.core.identity import Sigchain
+    from nodetide.core.crypto import password_decrypt
+    from nodetide.core.identity import Sigchain
 
     storage = get_storage()
 
@@ -407,7 +407,7 @@ def identity_restore(input_file: str, password: str, default: bool):
         dump = json.load(f)
 
     # Validate format
-    if dump.get("format") != "distriblog-identity-dump":
+    if dump.get("format") != "nodetide-identity-dump":
         click.echo("Invalid dump file format")
         storage.close()
         return
@@ -584,7 +584,7 @@ def message():
 @click.option("--file", "-f", "file_path", type=click.Path(exists=True), help="File to send")
 def message_send(recipient: str, text: str | None, file_path: str | None):
     """Send a message."""
-    from distriblog.content.mime import Content, MultipartContent
+    from nodetide.content.mime import Content, MultipartContent
 
     if not text and not file_path:
         click.echo("Provide --text or --file")
@@ -655,7 +655,7 @@ def daemon():
 def daemon_start(port: int, foreground: bool):
     """Start the relay daemon."""
     import asyncio
-    from distriblog.daemon.server import run_daemon
+    from nodetide.daemon.server import run_daemon
 
     storage = get_storage()
     ident = get_default_identity(storage)
@@ -682,7 +682,7 @@ def daemon_status():
     """Check daemon status."""
     # TODO: Implement proper status check
     click.echo("Daemon status check not implemented yet")
-    click.echo("Try: distriblog daemon start --foreground")
+    click.echo("Try: nodetide daemon start --foreground")
 
 
 # API commands
@@ -704,7 +704,7 @@ def api_start(host: str, port: int, public: bool, db_path: str | None, web_root:
     """Start the REST API server."""
     import asyncio
     import logging
-    from distriblog.api.app import run_api_server
+    from nodetide.api.app import run_api_server
 
     # Configure logging
     logging.basicConfig(
@@ -741,7 +741,7 @@ def api_start(host: str, port: int, public: bool, db_path: str | None, web_root:
 def api_docs():
     """Show API documentation."""
     docs = """
-Distriblog REST API
+Nodetide REST API
 ===================
 
 IDENTITY ENDPOINTS
@@ -843,7 +843,7 @@ def group():
 @click.option("--name", "-n", required=True, help="Group name")
 def group_create(name: str):
     """Create a new group."""
-    from distriblog.messaging.group import GroupCreateEvent, Group
+    from nodetide.messaging.group import GroupCreateEvent, Group
 
     storage = get_storage()
     ident = get_default_identity(storage)
