@@ -511,14 +511,12 @@
         hash_alg: 'sha256',
         timestamp,
         prev: prevHash,
-        signed_by: encodeHex(keyPair.signingKeyPair.publicKey),
+        signed_by: keyPair.signing.publicKey,
         distribution_points: distributionPoints,
       };
       // Sign the event
-      const signable = JSON.stringify(event, Object.keys(event).sort());
-      const signableBytes = new TextEncoder().encode(signable);
-      const signature = nacl.sign.detached(signableBytes, keyPair.signingKeyPair.secretKey);
-      event.signature = encodeHex(signature);
+      const signable = canonicalize(event);
+      event.signature = Crypto.sign(signable, keyPair.signing.secretKey);
       return event;
     },
   };
