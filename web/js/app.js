@@ -687,26 +687,22 @@
           SessionKeys.set(this.unlockingIdentity.identityHash, keyPair);
           Alpine.store('identity').setActive(this.unlockingIdentity.identityHash);
 
+          // Ensure identity exists on server before creating session
+          try {
+            await api.getIdentity(this.unlockingIdentity.identityHash);
+          } catch (e) {
+            if (e.status === 404) {
+              // Identity not on server, sync it first
+              const localIdentity = KeyStore.getIdentity(this.unlockingIdentity.identityHash);
+              await api.createIdentity(keyPair, localIdentity?.name || null, localIdentity?.distributionPoints || null);
+            }
+          }
+
+          // Now create session
           try {
             await api.createSession(this.unlockingIdentity.identityHash, keyPair);
           } catch (e) {
-            console.warn('[unlock] Failed to create API session:', e);
-            console.log('[unlock] e.message:', e.message, 'e.status:', e.status);
-            // If identity not found on server, try to sync it
-            if (e.status === 404 || (e.message && e.message.includes('not_found'))) {
-              console.log('[unlock] Identity not on server, attempting to sync...');
-              try {
-                const localIdentity = KeyStore.getIdentity(this.unlockingIdentity.identityHash);
-                console.log('[unlock] localIdentity:', localIdentity);
-                const createResult = await api.createIdentity(keyPair, localIdentity?.name || null, localIdentity?.distributionPoints || null);
-                console.log('[unlock] Identity synced, result:', createResult);
-                console.log('[unlock] Retrying session...');
-                await api.createSession(this.unlockingIdentity.identityHash, keyPair);
-                console.log('[unlock] Session created successfully');
-              } catch (syncErr) {
-                console.error('[unlock] Failed to sync identity:', syncErr);
-              }
-            }
+            console.warn('Failed to create API session:', e);
           }
 
           this.showUnlockModal = false;
