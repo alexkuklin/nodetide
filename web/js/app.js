@@ -783,15 +783,17 @@
           // Consumer-side: extract distribution_points from events
           this.distributionPoints = SigchainUtils.getLatestField(this.sigchain, 'distribution_points', []);
         } catch (e) {
-          console.warn('Failed to load identity from API:', e);
+          console.warn('[load] Failed to load identity from API:', e);
           // Identity not on server - try to register it if unlocked
           const keyPair = SessionKeys.get(activeHash);
+          console.log('[load] keyPair available:', !!keyPair);
           if (keyPair) {
-            console.log('Identity not on server, attempting to register...');
+            console.log('[load] Identity not on server, attempting to register...');
             try {
               const localIdentity = KeyStore.getIdentity(activeHash);
+              console.log('[load] localIdentity:', localIdentity?.name, 'distPoints:', localIdentity?.distributionPoints);
               await api.createIdentity(keyPair, localIdentity?.name || null, localIdentity?.distributionPoints || null);
-              console.log('Identity registered, reloading...');
+              console.log('[load] Identity registered, reloading...');
               // Reload to get the sigchain
               const data = await api.getIdentity(activeHash);
               this.sigchain = data.sigchain || [];
@@ -801,8 +803,11 @@
               Alpine.store('app').showSuccess('Identity synced to server');
               return;
             } catch (syncErr) {
-              console.warn('Failed to sync identity to server:', syncErr);
+              console.error('[load] Failed to sync identity to server:', syncErr);
+              Alpine.store('app').showError('Failed to sync identity: ' + syncErr.message);
             }
+          } else {
+            console.log('[load] Identity not unlocked, cannot sync');
           }
           this.sigchain = [];
           this.devices = [];
