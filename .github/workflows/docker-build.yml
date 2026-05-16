@@ -100,7 +100,7 @@ jobs:
       - name: Deploy python to VPS
         uses: appleboy/ssh-action@v1.0.3
         with:
-          host: dblog.kuklin.eu
+          host: nodetide.kuklin.eu
           username: deploy-nodetide
           key: ${{ secrets.VPS_SSH_KEY }}
           script: |
@@ -114,7 +114,7 @@ jobs:
       - name: Deploy golang to VPS
         uses: appleboy/ssh-action@v1.0.3
         with:
-          host: dblog.kuklin.eu
+          host: nodetide.kuklin.eu
           username: deploy-nodetide
           key: ${{ secrets.VPS_SSH_KEY }}
           script: |
