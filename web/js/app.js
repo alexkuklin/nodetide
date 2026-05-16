@@ -784,6 +784,26 @@
           this.distributionPoints = SigchainUtils.getLatestField(this.sigchain, 'distribution_points', []);
         } catch (e) {
           console.warn('Failed to load identity from API:', e);
+          // Identity not on server - try to register it if unlocked
+          const keyPair = SessionKeys.get(activeHash);
+          if (keyPair) {
+            console.log('Identity not on server, attempting to register...');
+            try {
+              const localIdentity = KeyStore.getIdentity(activeHash);
+              await api.createIdentity(keyPair, localIdentity?.name || null, localIdentity?.distributionPoints || null);
+              console.log('Identity registered, reloading...');
+              // Reload to get the sigchain
+              const data = await api.getIdentity(activeHash);
+              this.sigchain = data.sigchain || [];
+              this.devices = data.devices || [];
+              this.recovery = data.recovery || null;
+              this.distributionPoints = SigchainUtils.getLatestField(this.sigchain, 'distribution_points', []);
+              Alpine.store('app').showSuccess('Identity synced to server');
+              return;
+            } catch (syncErr) {
+              console.warn('Failed to sync identity to server:', syncErr);
+            }
+          }
           this.sigchain = [];
           this.devices = [];
           this.recovery = null;
