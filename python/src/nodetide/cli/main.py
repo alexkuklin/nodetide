@@ -133,7 +133,11 @@ def identity_show(identity_hash: str | None):
         click.echo(f"Type: {genesis.identity_type.value}")
         click.echo(f"Created: {genesis.timestamp}")
 
-    dist_points = ident.sigchain.get_distribution_points()
+    # Get distribution points by iterating events (consumer logic)
+    dist_points: list[str] = []
+    for event in ident.sigchain.events:
+        if hasattr(event, 'distribution_points') and event.distribution_points:
+            dist_points = event.distribution_points
     if dist_points:
         click.echo(f"Distribution points:")
         for dp in dist_points:

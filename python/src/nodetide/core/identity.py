@@ -719,20 +719,6 @@ class Sigchain:
                 recovery = event
         return recovery
 
-    def get_distribution_points(self) -> list[str]:
-        """Get the current distribution points.
-
-        Returns distribution points from the most recent SET_DISTRIBUTION event,
-        or from the genesis event if no SET_DISTRIBUTION has been issued.
-        """
-        points: list[str] = []
-        for event in self.events:
-            if isinstance(event, GenesisEvent) and event.distribution_points:
-                points = event.distribution_points
-            elif isinstance(event, SetDistributionEvent):
-                points = event.distribution_points
-        return points
-
     def verify(self) -> tuple[bool, str | None]:
         """Verify the sigchain.
 

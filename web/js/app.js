@@ -84,6 +84,23 @@
     return result;
   }
 
+  // Sigchain helpers (consumer-side interpretation)
+  const SigchainUtils = {
+    /**
+     * Get the latest value of a field from sigchain events.
+     * Iterates through all events and returns the last non-null value found.
+     */
+    getLatestField(events, fieldName, defaultValue = null) {
+      let value = defaultValue;
+      for (const event of events) {
+        if (event[fieldName] !== undefined && event[fieldName] !== null) {
+          value = event[fieldName];
+        }
+      }
+      return value;
+    },
+  };
+
   const Crypto = {
     generateKeyPair() {
       const signKp = nacl.sign.keyPair();
@@ -763,7 +780,8 @@
           this.sigchain = data.sigchain || [];
           this.devices = data.devices || [];
           this.recovery = data.recovery || null;
-          this.distributionPoints = this.extractDistributionPoints(this.sigchain);
+          // Consumer-side: extract distribution_points from events
+          this.distributionPoints = SigchainUtils.getLatestField(this.sigchain, 'distribution_points', []);
         } catch (e) {
           console.warn('Failed to load identity from API:', e);
           this.sigchain = [];
@@ -773,18 +791,6 @@
         } finally {
           this.loading = false;
         }
-      },
-
-      extractDistributionPoints(sigchain) {
-        let points = [];
-        for (const event of sigchain) {
-          if (event.type === 'genesis' && event.distribution_points) {
-            points = event.distribution_points;
-          } else if (event.type === 'set_distribution') {
-            points = event.distribution_points;
-          }
-        }
-        return points;
       },
 
       openDistributionModal() {
