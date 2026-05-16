@@ -777,11 +777,14 @@
 
         try {
           const data = await api.getIdentity(activeHash);
+          console.log('[load] API response:', data);
+          console.log('[load] data.sigchain:', data.sigchain);
           this.sigchain = data.sigchain || [];
           this.devices = data.devices || [];
           this.recovery = data.recovery || null;
           // Consumer-side: extract distribution_points from events
           this.distributionPoints = SigchainUtils.getLatestField(this.sigchain, 'distribution_points', []);
+          console.log('[load] loaded sigchain.length:', this.sigchain.length);
         } catch (e) {
           console.warn('[load] Failed to load identity from API:', e);
           // Identity not on server - try to register it if unlocked
@@ -830,6 +833,10 @@
 
       async saveDistributionPoints() {
         const activeHash = Alpine.store('identity').activeHash;
+        console.log('[saveDistributionPoints] activeHash:', activeHash);
+        console.log('[saveDistributionPoints] this.sigchain.length:', this.sigchain.length);
+        console.log('[saveDistributionPoints] this.sigchain:', this.sigchain);
+
         const keyPair = SessionKeys.get(activeHash);
         if (!keyPair) {
           Alpine.store('app').showError('Identity must be unlocked');
@@ -845,6 +852,7 @@
         const prevHash = this.sigchain.length > 0
           ? await this.getEventHash(this.sigchain[this.sigchain.length - 1])
           : null;
+        console.log('[saveDistributionPoints] prevHash:', prevHash);
 
         if (!prevHash) {
           Alpine.store('app').showError('Cannot determine sigchain head');
