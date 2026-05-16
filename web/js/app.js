@@ -690,17 +690,21 @@
           try {
             await api.createSession(this.unlockingIdentity.identityHash, keyPair);
           } catch (e) {
-            console.warn('Failed to create API session:', e);
+            console.warn('[unlock] Failed to create API session:', e);
+            console.log('[unlock] e.message:', e.message, 'e.status:', e.status);
             // If identity not found on server, try to sync it
-            if (e.message && e.message.includes('not_found')) {
-              console.log('Identity not on server, attempting to sync...');
+            if (e.status === 404 || (e.message && e.message.includes('not_found'))) {
+              console.log('[unlock] Identity not on server, attempting to sync...');
               try {
                 const localIdentity = KeyStore.getIdentity(this.unlockingIdentity.identityHash);
-                await api.createIdentity(keyPair, localIdentity?.name || null, localIdentity?.distributionPoints || null);
-                console.log('Identity synced, retrying session...');
+                console.log('[unlock] localIdentity:', localIdentity);
+                const createResult = await api.createIdentity(keyPair, localIdentity?.name || null, localIdentity?.distributionPoints || null);
+                console.log('[unlock] Identity synced, result:', createResult);
+                console.log('[unlock] Retrying session...');
                 await api.createSession(this.unlockingIdentity.identityHash, keyPair);
+                console.log('[unlock] Session created successfully');
               } catch (syncErr) {
-                console.warn('Failed to sync identity:', syncErr);
+                console.error('[unlock] Failed to sync identity:', syncErr);
               }
             }
           }
