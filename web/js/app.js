@@ -795,10 +795,19 @@
             try {
               const localIdentity = KeyStore.getIdentity(activeHash);
               console.log('[load] localIdentity:', localIdentity?.name, 'distPoints:', localIdentity?.distributionPoints);
-              await api.createIdentity(keyPair, localIdentity?.name || null, localIdentity?.distributionPoints || null);
+              console.log('[load] activeHash:', activeHash);
+              console.log('[load] keyPair.signing.publicKey:', keyPair.signing.publicKey);
+              const createResult = await api.createIdentity(keyPair, localIdentity?.name || null, localIdentity?.distributionPoints || null);
+              console.log('[load] createIdentity result:', createResult);
+              console.log('[load] server identity_hash:', createResult.identity_hash);
+              // Use the server's identity hash for reload
+              const serverHash = createResult.identity_hash;
+              if (serverHash !== activeHash) {
+                console.warn('[load] Hash mismatch! local:', activeHash, 'server:', serverHash);
+              }
               console.log('[load] Identity registered, reloading...');
               // Reload to get the sigchain
-              const data = await api.getIdentity(activeHash);
+              const data = await api.getIdentity(serverHash);
               this.sigchain = data.sigchain || [];
               this.devices = data.devices || [];
               this.recovery = data.recovery || null;
