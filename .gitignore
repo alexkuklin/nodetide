@@ -38,3 +38,7 @@ Thumbs.db
 # Project specific
 *.db
 *.sqlite3
+
+# Test files
+.test-password
+identity-*.json
