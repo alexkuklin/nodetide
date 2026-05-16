@@ -355,6 +355,50 @@
       color: var(--text-secondary);
     }
 
+    .event-header {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .event-toggle {
+      margin-left: auto;
+      color: var(--text-secondary);
+      font-size: 0.75rem;
+    }
+
+    .event-details {
+      margin-top: 0.75rem;
+      padding-top: 0.75rem;
+      border-top: 1px solid var(--border);
+    }
+
+    .event-field {
+      display: flex;
+      gap: 0.5rem;
+      margin-bottom: 0.25rem;
+      font-size: 0.85rem;
+    }
+
+    .event-field-name {
+      color: var(--text-secondary);
+      min-width: 120px;
+      flex-shrink: 0;
+    }
+
+    .event-field-value {
+      color: var(--text-primary);
+      word-break: break-all;
+    }
+
+    .text-mono {
+      font-family: monospace;
+    }
+
+    .text-small {
+      font-size: 0.75rem;
+    }
+
     /* Radio/Checkbox group */
     .radio-group {
       display: flex;
@@ -729,14 +773,26 @@
             <template x-if="sigchain.length === 0">
               <p class="text-muted" x-show="!loading">Sigchain not synced yet.</p>
             </template>
-            <template x-for="event in sigchain.slice().reverse().slice(0, 10)">
-              <div class="event-item">
-                <div class="event-type" x-text="event.type"></div>
-                <div class="event-time" x-text="new Date(event.timestamp * 1000).toLocaleString()"></div>
+            <template x-for="(event, idx) in sigchain.slice().reverse()">
+              <div class="event-item event-expandable" x-data="{ expanded: false }">
+                <div class="event-header" @click="expanded = !expanded" style="cursor: pointer;">
+                  <div class="event-type" x-text="event.type"></div>
+                  <div class="event-time" x-text="new Date(event.timestamp * 1000).toLocaleString()"></div>
+                  <span class="event-toggle" x-text="expanded ? '▼' : '▶'"></span>
+                </div>
+                <div class="event-details" x-show="expanded" x-collapse>
+                  <template x-for="[key, value] in Object.entries(event).filter(([k]) => k !== 'signature')">
+                    <div class="event-field">
+                      <span class="event-field-name" x-text="key + ':'"></span>
+                      <span class="event-field-value" x-text="Array.isArray(value) ? value.join(', ') : (typeof value === 'object' && value !== null ? JSON.stringify(value) : String(value))"></span>
+                    </div>
+                  </template>
+                  <div class="event-field">
+                    <span class="event-field-name">signature:</span>
+                    <span class="event-field-value text-mono text-small" x-text="event.signature?.slice(0, 32) + '...'"></span>
+                  </div>
+                </div>
               </div>
-            </template>
-            <template x-if="sigchain.length > 10">
-              <p class="text-muted text-small text-center">... and <span x-text="sigchain.length - 10"></span> more events</p>
             </template>
           </div>
         </div>
