@@ -453,6 +453,10 @@
             :class="{ active: $store.app.currentView === 'trust' }">
       Trust
     </button>
+    <button @click="$store.app.setView('directory')"
+            :class="{ active: $store.app.currentView === 'directory' }">
+      Directory
+    </button>
     <button @click="$store.app.setView('settings')"
             :class="{ active: $store.app.currentView === 'settings' }">
       Settings
@@ -859,6 +863,30 @@
             </div>
           </template>
         </div>
+      </div>
+    </div>
+
+    <!-- Directory view -->
+    <div x-show="$store.app.currentView === 'directory'" x-data="directoryManager" x-cloak>
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">Server Directory</span>
+          <button class="btn" @click="load()">Refresh</button>
+        </div>
+
+        <p x-show="loading" class="text-muted">Loading...</p>
+        <p x-show="!loading && identities.length === 0" class="text-muted">No identities on server.</p>
+
+        <template x-for="ident in identities" :key="ident.identity_hash">
+          <div class="identity-item">
+            <div class="identity-info">
+              <span class="identity-name" x-text="ident.name || 'Unnamed'"></span>
+              <span class="identity-type" x-text="ident.type"></span>
+              <span class="badge" x-show="ident.is_local">Local</span>
+            </div>
+            <div class="identity-hash" x-text="ident.identity_hash"></div>
+          </div>
+        </template>
       </div>
     </div>
 

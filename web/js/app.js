@@ -494,6 +494,10 @@
       return result;
     },
 
+    async listServerIdentities() {
+      return this.request('GET', '/identities');
+    },
+
     async getTrustAssertions(identityHash) {
       return this.request('GET', `/trust/assertions?target=${identityHash}`);
     },
@@ -966,6 +970,34 @@
 
       assertName() { Alpine.store('app').showError('Not yet implemented'); },
       delegate() { Alpine.store('app').showError('Not yet implemented'); },
+    }));
+
+    // Directory manager - shows all identities on server
+    Alpine.data('directoryManager', () => ({
+      identities: [],
+      loading: false,
+
+      init() {
+        this.$watch('$store.app.currentView', (view) => {
+          if (view === 'directory') this.load();
+        });
+        if (Alpine.store('app').currentView === 'directory') {
+          this.load();
+        }
+      },
+
+      async load() {
+        this.loading = true;
+        try {
+          const data = await api.listServerIdentities();
+          this.identities = data.identities || [];
+        } catch (e) {
+          console.warn('Failed to load server identities:', e);
+          this.identities = [];
+        } finally {
+          this.loading = false;
+        }
+      },
     }));
 
     // Settings manager
