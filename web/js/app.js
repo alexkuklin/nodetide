@@ -244,8 +244,32 @@
       console.log('[createIdentityWithPassword] starting, name:', name);
       const keyPair = Crypto.generateKeyPair();
       console.log('[createIdentityWithPassword] keyPair generated');
-      const identityHash = await sha256(keyPair.signing.publicKey);
+
+      // Create genesis event to compute identity hash (must match server computation)
+      const timestamp = Math.floor(Date.now() / 1000);
+      const genesisEvent = {
+        version: 1,
+        type: 'genesis',
+        alg: 'ed25519',
+        hash_alg: 'sha256',
+        timestamp,
+        prev: null,
+        signed_by: keyPair.signing.publicKey,
+        pubkey: keyPair.signing.publicKey,
+        encryption_pubkey: keyPair.encryption.publicKey,
+        identity_type: 'personal',
+        name: name || null,
+        ephemeral: false,
+        ownership_proof: null,
+        distribution_points: distributionPoints,
+      };
+      const signable = canonicalize(genesisEvent);
+      genesisEvent.signature = Crypto.sign(signable, keyPair.signing.secretKey);
+
+      // Identity hash = hash of the complete signed genesis event
+      const identityHash = await sha256(canonicalize(genesisEvent));
       console.log('[createIdentityWithPassword] identityHash:', identityHash.slice(0, 16) + '...');
+
       const encryptedKeys = await Crypto.encryptWithPassword(keyPair, password);
 
       const identity = {
@@ -257,6 +281,7 @@
         signingPubkey: keyPair.signing.publicKey,
         encryptionPubkey: keyPair.encryption.publicKey,
         distributionPoints: distributionPoints,
+        genesisEvent, // Store for later sync
       };
 
       this._saveIdentity(identity);
@@ -498,6 +523,10 @@
       return this.request('GET', '/identities');
     },
 
+    async submitGenesisEvent(event) {
+      return this.request('POST', '/identities', { event });
+    },
+
     async getTrustAssertions(identityHash) {
       return this.request('GET', `/trust/assertions?target=${identityHash}`);
     },
@@ -648,9 +677,10 @@
           console.log('[createIdentity] identity.distributionPoints:', result.identity.distributionPoints);
 
           try {
-            console.log('[createIdentity] calling api.createIdentity with distPoints:', distPoints);
-            await api.createIdentity(result.keyPair, name, distPoints);
-            console.log('[createIdentity] api.createIdentity succeeded');
+            // Use stored genesis event to ensure hash matches
+            console.log('[createIdentity] syncing genesis event to server');
+            await api.submitGenesisEvent(result.identity.genesisEvent);
+            console.log('[createIdentity] api.submitGenesisEvent succeeded');
           } catch (e) {
             console.warn('[createIdentity] Failed to register identity with API:', e);
           }
@@ -694,9 +724,14 @@
             await api.getIdentity(this.unlockingIdentity.identityHash);
           } catch (e) {
             if (e.status === 404) {
-              // Identity not on server, sync it first
+              // Identity not on server, sync it using stored genesis event
               const localIdentity = KeyStore.getIdentity(this.unlockingIdentity.identityHash);
-              await api.createIdentity(keyPair, localIdentity?.name || null, localIdentity?.distributionPoints || null);
+              if (localIdentity?.genesisEvent) {
+                await api.submitGenesisEvent(localIdentity.genesisEvent);
+              } else {
+                // Fallback: create new genesis (hash will differ!)
+                await api.createIdentity(keyPair, localIdentity?.name || null, localIdentity?.distributionPoints || null);
+              }
             }
           }
 
@@ -808,13 +843,19 @@
             console.log('[load] Identity not on server, attempting to register...');
             try {
               const localIdentity = KeyStore.getIdentity(activeHash);
-              console.log('[load] localIdentity:', localIdentity?.name, 'distPoints:', localIdentity?.distributionPoints);
-              console.log('[load] activeHash:', activeHash);
-              console.log('[load] keyPair.signing.publicKey:', keyPair.signing.publicKey);
-              const createResult = await api.createIdentity(keyPair, localIdentity?.name || null, localIdentity?.distributionPoints || null);
+              console.log('[load] localIdentity:', localIdentity?.name, 'hasGenesisEvent:', !!localIdentity?.genesisEvent);
+
+              let createResult;
+              if (localIdentity?.genesisEvent) {
+                // Use stored genesis event to ensure hash matches
+                createResult = await api.submitGenesisEvent(localIdentity.genesisEvent);
+              } else {
+                // Fallback: create new genesis (may have different hash)
+                console.log('[load] No stored genesis, creating new one');
+                createResult = await api.createIdentity(keyPair, localIdentity?.name || null, localIdentity?.distributionPoints || null);
+              }
               console.log('[load] createIdentity result:', createResult);
               console.log('[load] server identity_hash:', createResult.identity_hash);
-              // Use the server's identity hash for reload
               const serverHash = createResult.identity_hash;
               if (serverHash !== activeHash) {
                 console.warn('[load] Hash mismatch! local:', activeHash, 'server:', serverHash);
