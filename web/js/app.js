@@ -691,6 +691,18 @@
             await api.createSession(this.unlockingIdentity.identityHash, keyPair);
           } catch (e) {
             console.warn('Failed to create API session:', e);
+            // If identity not found on server, try to sync it
+            if (e.message && e.message.includes('not_found')) {
+              console.log('Identity not on server, attempting to sync...');
+              try {
+                const localIdentity = KeyStore.getIdentity(this.unlockingIdentity.identityHash);
+                await api.createIdentity(keyPair, localIdentity?.name || null, localIdentity?.distributionPoints || null);
+                console.log('Identity synced, retrying session...');
+                await api.createSession(this.unlockingIdentity.identityHash, keyPair);
+              } catch (syncErr) {
+                console.warn('Failed to sync identity:', syncErr);
+              }
+            }
           }
 
           this.showUnlockModal = false;
