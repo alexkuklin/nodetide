@@ -182,6 +182,7 @@ async def get_identity(request: web.Request) -> web.Response:
             devices=devices,
             recovery=recovery,
             sigchain_length=len(sigchain.events),
+            sigchain=sigchain.to_list(),
             verified=valid,
             master_pubkey=sigchain.get_current_master_key() or "",
         ).to_dict()

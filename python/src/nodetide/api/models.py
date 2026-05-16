@@ -77,6 +77,7 @@ class IdentityResponse:
     devices: list[dict[str, Any]]
     recovery: dict[str, Any] | None
     sigchain_length: int
+    sigchain: list[dict[str, Any]]
     verified: bool
     master_pubkey: str
 
@@ -90,6 +91,7 @@ class IdentityResponse:
             "devices": self.devices,
             "recovery": self.recovery,
             "sigchain_length": self.sigchain_length,
+            "sigchain": self.sigchain,
             "verified": self.verified,
             "master_pubkey": self.master_pubkey,
         }
