@@ -70,10 +70,18 @@
   }
 
   async function sha256(data) {
+    console.log('[sha256] called with:', typeof data, data?.length || data);
+    if (!crypto || !crypto.subtle) {
+      console.error('[sha256] crypto.subtle not available. Secure context:', window.isSecureContext);
+      throw new Error('Web Crypto API not available. HTTPS required.');
+    }
     const encoder = new TextEncoder();
     const bytes = typeof data === 'string' ? encoder.encode(data) : data;
+    console.log('[sha256] hashing bytes:', bytes.length);
     const hashBuffer = await crypto.subtle.digest('SHA-256', bytes);
-    return encodeHex(new Uint8Array(hashBuffer));
+    const result = encodeHex(new Uint8Array(hashBuffer));
+    console.log('[sha256] result:', result.slice(0, 16) + '...');
+    return result;
   }
 
   const Crypto = {
@@ -216,8 +224,11 @@
     },
 
     async createIdentityWithPassword(name, password, distributionPoints = null) {
+      console.log('[createIdentityWithPassword] starting, name:', name);
       const keyPair = Crypto.generateKeyPair();
+      console.log('[createIdentityWithPassword] keyPair generated');
       const identityHash = await sha256(keyPair.signing.publicKey);
+      console.log('[createIdentityWithPassword] identityHash:', identityHash.slice(0, 16) + '...');
       const encryptedKeys = await Crypto.encryptWithPassword(keyPair, password);
 
       const identity = {
