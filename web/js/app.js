@@ -432,6 +432,7 @@
     },
 
     async createIdentity(keyPair, name, distributionPoints = null) {
+      console.log('[api.createIdentity] called with distributionPoints:', distributionPoints);
       const timestamp = Math.floor(Date.now() / 1000);
       const event = {
         // Base SigchainEvent fields
@@ -451,8 +452,10 @@
         ownership_proof: null,
         distribution_points: distributionPoints,
       };
+      console.log('[api.createIdentity] event.distribution_points:', event.distribution_points);
       const signable = canonicalize(event);
       event.signature = Crypto.sign(signable, keyPair.signing.secretKey);
+      console.log('[api.createIdentity] sending event to API...');
       return this.request('POST', '/identities', { event });
     },
 
@@ -615,16 +618,22 @@
         const distPoints = distributionPoints
           ? distributionPoints.split(/[\n,]/).map(s => s.trim()).filter(s => s)
           : null;
+        console.log('[createIdentity] parsed distPoints:', distPoints);
 
         Alpine.store('app').loading = true;
 
         try {
+          console.log('[createIdentity] calling KeyStore.createIdentityWithPassword...');
           const result = await KeyStore.createIdentityWithPassword(name, password, distPoints);
+          console.log('[createIdentity] identity created locally, hash:', result.identity.identityHash);
+          console.log('[createIdentity] identity.distributionPoints:', result.identity.distributionPoints);
 
           try {
+            console.log('[createIdentity] calling api.createIdentity with distPoints:', distPoints);
             await api.createIdentity(result.keyPair, name, distPoints);
+            console.log('[createIdentity] api.createIdentity succeeded');
           } catch (e) {
-            console.warn('Failed to register identity with API:', e);
+            console.warn('[createIdentity] Failed to register identity with API:', e);
           }
 
           SessionKeys.set(result.identity.identityHash, result.keyPair);
