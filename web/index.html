@@ -399,6 +399,39 @@
       font-size: 0.75rem;
     }
 
+    /* Message styles */
+    .message-item {
+      padding: 0.75rem;
+      background: var(--bg-primary);
+      border-radius: 0.25rem;
+      margin-bottom: 0.5rem;
+      border-left: 3px solid var(--accent);
+    }
+
+    .message-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 0.5rem;
+    }
+
+    .message-sender {
+      font-family: monospace;
+      font-size: 0.85rem;
+      color: var(--accent);
+    }
+
+    .message-time {
+      font-size: 0.75rem;
+      color: var(--text-secondary);
+    }
+
+    .message-content {
+      font-size: 0.95rem;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
     /* Radio/Checkbox group */
     .radio-group {
       display: flex;
@@ -500,6 +533,10 @@
     <button @click="$store.app.setView('directory')"
             :class="{ active: $store.app.currentView === 'directory' }">
       Directory
+    </button>
+    <button @click="$store.app.setView('messages')"
+            :class="{ active: $store.app.currentView === 'messages' }">
+      Messages
     </button>
     <button @click="$store.app.setView('settings')"
             :class="{ active: $store.app.currentView === 'settings' }">
@@ -941,6 +978,52 @@
               <span class="badge" x-show="ident.is_local">Local</span>
             </div>
             <div class="identity-hash" x-text="ident.identity_hash"></div>
+          </div>
+        </template>
+      </div>
+    </div>
+
+    <!-- Messages view -->
+    <div x-show="$store.app.currentView === 'messages'" x-data="messagesManager" x-cloak>
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">Publish Message</span>
+        </div>
+
+        <template x-if="!$store.identity.activeHash">
+          <p class="text-muted">Select an identity to publish messages.</p>
+        </template>
+
+        <template x-if="$store.identity.activeHash">
+          <form @submit.prevent="publish">
+            <div class="form-group">
+              <label>Message</label>
+              <textarea x-model="messageText" rows="4" placeholder="Enter your message..."></textarea>
+            </div>
+            <button type="submit" class="btn" :disabled="!messageText.trim() || publishing">
+              <span x-show="!publishing">Publish</span>
+              <span x-show="publishing">Publishing...</span>
+            </button>
+          </form>
+        </template>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">Public Messages</span>
+          <button class="btn" @click="load()">Refresh</button>
+        </div>
+
+        <p x-show="loading" class="text-muted">Loading...</p>
+        <p x-show="!loading && messages.length === 0" class="text-muted">No messages yet.</p>
+
+        <template x-for="msg in messages" :key="msg.created_at">
+          <div class="message-item">
+            <div class="message-header">
+              <span class="message-sender" x-text="msg.sender?.slice(0, 12) + '...'"></span>
+              <span class="message-time" x-text="new Date(msg.created_at * 1000).toLocaleString()"></span>
+            </div>
+            <div class="message-content" x-text="msg.content?.body || JSON.stringify(msg.content)"></div>
           </div>
         </template>
       </div>

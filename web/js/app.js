@@ -527,6 +527,17 @@
       return this.request('POST', '/identities', { event });
     },
 
+    async publishMessage(message) {
+      return this.request('POST', '/messages', { message });
+    },
+
+    async listMessages(sender = null, limit = 50) {
+      const params = new URLSearchParams();
+      if (sender) params.set('sender', sender);
+      params.set('limit', limit);
+      return this.request('GET', `/messages?${params}`);
+    },
+
     async getTrustAssertions(identityHash) {
       return this.request('GET', `/trust/assertions?target=${identityHash}`);
     },
@@ -1037,6 +1048,85 @@
           this.identities = [];
         } finally {
           this.loading = false;
+        }
+      },
+    }));
+
+    // Messages manager
+    Alpine.data('messagesManager', () => ({
+      messages: [],
+      messageText: '',
+      loading: false,
+      publishing: false,
+
+      init() {
+        this.$watch('$store.app.currentView', (view) => {
+          if (view === 'messages') this.load();
+        });
+        if (Alpine.store('app').currentView === 'messages') {
+          this.load();
+        }
+      },
+
+      async load() {
+        this.loading = true;
+        try {
+          const data = await api.listMessages();
+          this.messages = data.messages || [];
+        } catch (e) {
+          console.warn('Failed to load messages:', e);
+          this.messages = [];
+        } finally {
+          this.loading = false;
+        }
+      },
+
+      async publish() {
+        const activeHash = Alpine.store('identity').activeHash;
+        if (!activeHash) {
+          Alpine.store('app').showError('No identity selected');
+          return;
+        }
+
+        const keyPair = SessionKeys.get(activeHash);
+        if (!keyPair) {
+          Alpine.store('app').showError('Identity must be unlocked');
+          return;
+        }
+
+        if (!this.messageText.trim()) {
+          Alpine.store('app').showError('Message cannot be empty');
+          return;
+        }
+
+        this.publishing = true;
+        try {
+          const timestamp = Math.floor(Date.now() / 1000);
+          const message = {
+            type: 'public',
+            sender: activeHash,
+            content: {
+              content_type: 'text/plain',
+              body: this.messageText.trim(),
+            },
+            created_at: timestamp,
+            reply_to: null,
+            request_receipt: 'none',
+            request_transit_report: false,
+          };
+
+          // Sign the message
+          const signable = JSON.stringify(message, Object.keys(message).sort());
+          message.signature = Crypto.sign(signable, keyPair.signing.secretKey);
+
+          await api.publishMessage(message);
+          Alpine.store('app').showSuccess('Message published');
+          this.messageText = '';
+          this.load(); // Refresh list
+        } catch (e) {
+          Alpine.store('app').showError('Failed to publish: ' + e.message);
+        } finally {
+          this.publishing = false;
         }
       },
     }));

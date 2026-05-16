@@ -814,6 +814,103 @@ async def lookup_identity(request: web.Request) -> web.Response:
         })
 
 
+# ============================================
+# MESSAGE ROUTES
+# ============================================
+
+async def publish_message(request: web.Request) -> web.Response:
+    """POST /messages - Publish a signed public message."""
+    storage: Storage = request.app["storage"]
+
+    try:
+        data = await request.json()
+        message_data = data.get("message")
+        if not message_data:
+            return error_response(ErrorCode.INVALID_REQUEST, "Missing message", 400)
+
+        # Validate required fields
+        required = ["type", "sender", "content", "created_at", "signature"]
+        for field in required:
+            if field not in message_data:
+                return error_response(ErrorCode.INVALID_REQUEST, f"Missing field: {field}", 400)
+
+        if message_data.get("type") != "public":
+            return error_response(ErrorCode.INVALID_REQUEST, "Only public messages supported", 400)
+
+        # Verify sender exists
+        sender = message_data["sender"]
+        sigchain = storage.get_sigchain(sender)
+        if not sigchain:
+            return error_response(ErrorCode.NOT_FOUND, f"Sender {sender} not found", 404)
+
+        # Verify signature
+        from nodetide.messaging.message import PublicMessage
+        msg = PublicMessage.from_dict(message_data)
+        signable = json.dumps(msg.signable_dict(), sort_keys=True, separators=(",", ":"))
+        master_key = sigchain.get_current_master_key()
+        if not master_key:
+            return error_response(ErrorCode.INVALID_SIGCHAIN, "No master key for sender", 400)
+
+        from nodetide.core.crypto import verify_signature
+        if not verify_signature(signable.encode(), msg.signature, master_key):
+            return error_response(ErrorCode.INVALID_SIGNATURE, "Invalid message signature", 400)
+
+        # Save message
+        message_hash = msg.message_hash
+        storage.save_message(
+            message_hash=message_hash,
+            bundle_json=json.dumps(message_data),
+            sender_identity=sender,
+            recipient_identity=None,
+            message_type="public",
+            created_at=message_data["created_at"],
+        )
+
+        return web.json_response({
+            "message_hash": message_hash,
+            "accepted": True,
+        }, status=201)
+
+    except json.JSONDecodeError:
+        return error_response(ErrorCode.INVALID_REQUEST, "Invalid JSON", 400)
+    except Exception as e:
+        logger.exception("Error publishing message")
+        return error_response(ErrorCode.INTERNAL_ERROR, str(e), 500)
+
+
+async def list_messages(request: web.Request) -> web.Response:
+    """GET /messages - List public messages."""
+    storage: Storage = request.app["storage"]
+
+    sender = request.query.get("sender")
+    limit = int(request.query.get("limit", 50))
+
+    messages = storage.list_messages(
+        sender_identity=sender,
+        message_type="public",
+        limit=limit,
+    )
+
+    return web.json_response({
+        "messages": [json.loads(m["bundle_json"]) for m in messages],
+    })
+
+
+async def get_message(request: web.Request) -> web.Response:
+    """GET /messages/{hash} - Get a specific message."""
+    storage: Storage = request.app["storage"]
+    message_hash = request.match_info["hash"]
+
+    message = storage.get_message(message_hash)
+    if not message:
+        return error_response(ErrorCode.NOT_FOUND, "Message not found", 404)
+
+    return web.json_response({
+        "message": json.loads(message["bundle_json"]),
+        "message_hash": message_hash,
+    })
+
+
 def setup_routes(app: web.Application) -> None:
     """Setup all API routes."""
 
@@ -846,3 +943,8 @@ def setup_routes(app: web.Application) -> None:
     # Query routes
     app.router.add_post("/api/verify", verify_sigchain)
     app.router.add_get("/api/lookup/{hash}", lookup_identity)
+
+    # Message routes
+    app.router.add_post("/api/messages", publish_message)
+    app.router.add_get("/api/messages", list_messages)
+    app.router.add_get("/api/messages/{hash}", get_message)
