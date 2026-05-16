@@ -1,10 +1,10 @@
-# Distriblog
+# Nodetide
 
 A distributed identity and messaging system with multiple language implementations.
 
 ## Overview
 
-Distriblog is a decentralized identity system built on cryptographic sigchains. It provides:
+Nodetide is a decentralized identity system built on cryptographic sigchains. It provides:
 
 - **Self-sovereign identity**: Users control their own cryptographic keys
 - **Sigchain-based verification**: All identity operations are cryptographically linked
@@ -18,9 +18,9 @@ Distriblog is a decentralized identity system built on cryptographic sigchains. 
 The project supports multiple backend implementations sharing a common web client:
 
 ```
-distriblog/
+Nodetide/
 ├── python/              # Python implementation (aiohttp)
-│   ├── src/distriblog/  # Source code
+│   ├── src/Nodetide/  # Source code
 │   ├── tests/           # Test suite
 │   ├── Dockerfile
 │   └── pyproject.toml
@@ -58,7 +58,7 @@ Each implementation:
 ```bash
 cd python
 pip install -e .
-python -m distriblog.cli.main api start --port 4557
+python -m Nodetide.cli.main api start --port 4557
 ```
 
 **Go:**
@@ -69,14 +69,14 @@ go run .
 
 **Docker (Python):**
 ```bash
-docker build -f python/Dockerfile -t distriblog:python .
-docker run -p 4557:4557 -v distriblog-data:/data distriblog:python
+docker build -f python/Dockerfile -t Nodetide:python .
+docker run -p 4557:4557 -v Nodetide-data:/data Nodetide:python
 ```
 
 **Docker (Go):**
 ```bash
-docker build -f golang/Dockerfile -t distriblog:golang .
-docker run -p 4557:4557 -v distriblog-data:/data distriblog:golang
+docker build -f golang/Dockerfile -t Nodetide:golang .
+docker run -p 4557:4557 -v Nodetide-data:/data Nodetide:golang
 ```
 
 ### Accessing the Web UI
@@ -87,23 +87,23 @@ Open http://localhost:4557 in your browser.
 
 ```bash
 # Identity management
-distriblog identity create [--name NAME]
-distriblog identity list
-distriblog identity show [IDENTITY_HASH]
-distriblog identity add-device --label "Phone"
-distriblog identity set-recovery --trustees A,B,C --threshold 2
+Nodetide identity create [--name NAME]
+Nodetide identity list
+Nodetide identity show [IDENTITY_HASH]
+Nodetide identity add-device --label "Phone"
+Nodetide identity set-recovery --trustees A,B,C --threshold 2
 
 # Trust assertions
-distriblog trust assert IDENTITY --name "Bob" --confidence 0.9
-distriblog trust delegate IDENTITY --weight 0.8
-distriblog trust show IDENTITY
+Nodetide trust assert IDENTITY --name "Bob" --confidence 0.9
+Nodetide trust delegate IDENTITY --weight 0.8
+Nodetide trust show IDENTITY
 
 # Messaging
-distriblog message send RECIPIENT --text "Hello"
-distriblog message list
+Nodetide message send RECIPIENT --text "Hello"
+Nodetide message list
 
 # API server
-distriblog api start [--host HOST] [--port PORT] [--web-root PATH]
+Nodetide api start [--host HOST] [--port PORT] [--web-root PATH]
 ```
 
 ## API Reference
@@ -178,7 +178,7 @@ The production deployment uses:
 │           │                           │                     │
 │           ▼                           ▼                     │
 │  ┌─────────────────┐         ┌─────────────────┐           │
-│  │ distriblog-python│         │ distriblog-golang│           │
+│  │ Nodetide-python│         │ Nodetide-golang│           │
 │  │    :4560        │         │    :4561        │           │
 │  └─────────────────┘         └─────────────────┘           │
 └─────────────────────────────────────────────────────────────┘
@@ -216,37 +216,37 @@ On push to `main`:
 ```
 
 1. **Build Job** (parallel matrix):
-   - Builds `python/Dockerfile` → `distriblog:python-latest`
-   - Builds `golang/Dockerfile` → `distriblog:golang-latest`
+   - Builds `python/Dockerfile` → `Nodetide:python-latest`
+   - Builds `golang/Dockerfile` → `Nodetide:golang-latest`
    - Pushes to AWS ECR with tags: `{variant}-latest`, `{variant}-{sha}`
    - Multi-arch: `linux/amd64`, `linux/arm64`
 
 2. **Deploy Job** (after build):
-   - SSHes to VPS as `deploy-distriblog` user
-   - Runs `/usr/local/bin/deploy-distriblog-wrapper.sh {variant}`
+   - SSHes to VPS as `deploy-Nodetide` user
+   - Runs `/usr/local/bin/deploy-Nodetide-wrapper.sh {variant}`
    - Pulls new image from ECR and restarts container
 
 ### Manual Deployment
 
 ```bash
 # Deploy specific variant
-ssh deploy-distriblog@dblog.kuklin.eu \
-    "sudo /usr/local/bin/deploy-distriblog-wrapper.sh python"
+ssh deploy-Nodetide@dblog.kuklin.eu \
+    "sudo /usr/local/bin/deploy-Nodetide-wrapper.sh python"
 
 # Deploy all variants
 for v in python golang; do
-    ssh deploy-distriblog@dblog.kuklin.eu \
-        "sudo /usr/local/bin/deploy-distriblog-wrapper.sh $v"
+    ssh deploy-Nodetide@dblog.kuklin.eu \
+        "sudo /usr/local/bin/deploy-Nodetide-wrapper.sh $v"
 done
 ```
 
 ### Infrastructure Management
 
-Infrastructure is managed via Terraform in [distriblog-infra](https://github.com/alexkuklin/distriblog-infra):
+Infrastructure is managed via Terraform in [Nodetide-infra](https://github.com/alexkuklin/Nodetide-infra):
 
 ```bash
 # Plan changes
-cd distriblog-infra/terraform
+cd Nodetide-infra/terraform
 terraform plan
 
 # Apply changes
@@ -256,9 +256,9 @@ terraform apply
 Or trigger via GitHub Actions → "Terraform Apply" workflow (manual dispatch).
 
 **Key Resources:**
-- `hcloud_server.distriblog` - VPS instance
+- `hcloud_server.Nodetide` - VPS instance
 - `hcloud_zone_record.*` - DNS records (A, AAAA, wildcard)
-- `aws_ecr_repository.distriblog` - Container registry
+- `aws_ecr_repository.Nodetide` - Container registry
 - `aws_iam_role.github_actions` - OIDC role for CI/CD
 
 ## Adding a New Implementation
@@ -290,12 +290,12 @@ COPY web/ ./web/
 RUN cargo build --release
 
 FROM debian:bookworm-slim
-RUN useradd -m distriblog
-COPY --from=builder /build/target/release/distriblog /app/
+RUN useradd -m Nodetide
+COPY --from=builder /build/target/release/Nodetide /app/
 WORKDIR /app
-USER distriblog
+USER Nodetide
 EXPOSE 4557
-CMD ["./distriblog"]
+CMD ["./Nodetide"]
 ```
 
 ### 4. Update Workflow Matrix
@@ -315,7 +315,7 @@ matrix:
 
 ### 5. Update VPS Configuration
 
-In `distriblog-infra/terraform/hetzner_vps.tf`:
+In `Nodetide-infra/terraform/hetzner_vps.tf`:
 
 **Port mapping:**
 ```bash
@@ -340,7 +340,7 @@ map $host $backend_port {
 ### 6. Apply Infrastructure
 
 ```bash
-cd distriblog-infra/terraform
+cd Nodetide-infra/terraform
 terraform apply
 ```
 
@@ -358,7 +358,7 @@ pip install -e ".[dev]"
 pytest tests/
 
 # Run with auto-reload
-python -m distriblog.cli.main api start --port 4557
+python -m Nodetide.cli.main api start --port 4557
 ```
 
 **Code Structure:**
@@ -390,7 +390,7 @@ The web client uses Alpine.js and is served statically:
 ```bash
 # Serve with Python backend
 cd python
-python -m distriblog.cli.main api start --web-root ../web
+python -m Nodetide.cli.main api start --web-root ../web
 
 # Or with any static server
 cd web
