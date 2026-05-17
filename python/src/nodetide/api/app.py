@@ -11,7 +11,7 @@ from aiohttp import web
 
 from nodetide.core.storage import Storage
 from nodetide.api.routes import setup_routes
-from nodetide.api.auth import SessionStore, RecoveryStore
+from nodetide.api.auth import SessionStore, RecoveryStore, setup_casbin_auth, casbin_middleware
 
 
 logger = logging.getLogger(__name__)
@@ -144,6 +144,12 @@ def create_app(
         return response
 
     app.middlewares.append(cors_middleware)
+
+    # Setup casbin authorization (for relay mode, enforce access control)
+    if relay_mode:
+        setup_casbin_auth(app)
+        app.middlewares.append(casbin_middleware)
+        logger.info("Casbin authorization enabled")
 
     # Setup static file serving for web client (unless in relay mode)
     relay_mode = os.environ.get("NODETIDE_RELAY_MODE") == "1"

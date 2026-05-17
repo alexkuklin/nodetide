@@ -1,0 +1,36 @@
+# Casbin policy for nodetide API
+# Format: p, subject, object (path pattern), action (HTTP method)
+
+# Public endpoints - anyone can access
+p, anonymous, /health, GET
+p, anonymous, /api/identities, GET
+p, anonymous, /api/identities, POST
+p, anonymous, /api/identities/:id, GET
+p, anonymous, /api/identities/:id/sigchain, GET
+p, anonymous, /api/identities/:id/events, POST
+p, anonymous, /api/identities/:id/devices, GET
+p, anonymous, /api/messages, GET
+p, anonymous, /api/messages, POST
+p, anonymous, /api/messages/:id, GET
+p, anonymous, /api/session, POST
+p, anonymous, /api/session, GET
+p, anonymous, /api/session, DELETE
+p, anonymous, /api/verify, POST
+p, anonymous, /api/lookup/:id, GET
+p, anonymous, /api/trust/*, GET
+p, anonymous, /api/trust/*, POST
+
+# Relay status is public (read-only)
+p, anonymous, /api/relay/status, GET
+p, anonymous, /api/relay/identities, GET
+
+# Relay configuration - admin only
+p, admin, /api/relay/identities, POST
+p, admin, /api/relay/identities/:id, DELETE
+p, admin, /api/relay/polling/*, POST
+p, admin, /api/relay/polling/*, PUT
+
+# Role assignments
+# localhost and token holders are admins
+g, localhost, admin
+g, token_holder, admin
