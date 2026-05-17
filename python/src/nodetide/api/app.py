@@ -44,11 +44,20 @@ async def cleanup_task(app: web.Application) -> None:
 async def on_startup(app: web.Application) -> None:
     """Called on application startup."""
     app["cleanup_task"] = asyncio.create_task(cleanup_task(app))
+
+    # Start relay poller if in relay mode
+    if app.get("relay_poller"):
+        await app["relay_poller"].start()
+
     logger.info("API server started")
 
 
 async def on_cleanup(app: web.Application) -> None:
     """Called on application cleanup."""
+    # Stop relay poller
+    if app.get("relay_poller"):
+        await app["relay_poller"].stop()
+
     if "cleanup_task" in app:
         app["cleanup_task"].cancel()
         try:
@@ -66,6 +75,8 @@ def create_app(
     storage: Storage | None = None,
     db_path: Path | str | None = None,
     web_root: Path | str | None = None,
+    relay_mode: bool = False,
+    poll_interval: int = 300,
 ) -> web.Application:
     """Create the API application.
 
@@ -73,6 +84,8 @@ def create_app(
         storage: Existing storage instance to use
         db_path: Path to database file (if storage not provided)
         web_root: Path to web client files (optional)
+        relay_mode: Enable relay mode with polling
+        poll_interval: Polling interval in seconds (default 300)
 
     Returns:
         Configured aiohttp Application
@@ -96,6 +109,16 @@ def create_app(
     # Setup stores
     app["session_store"] = SessionStore()
     app["recovery_store"] = RecoveryStore()
+
+    # Setup relay poller if in relay mode
+    relay_mode = relay_mode or os.environ.get("NODETIDE_RELAY_MODE") == "1"
+    if relay_mode:
+        from nodetide.relay import RelayPoller
+        app["relay_poller"] = RelayPoller(
+            storage=app["storage"],
+            poll_interval=poll_interval,
+        )
+        logger.info(f"Relay mode enabled (poll_interval={poll_interval}s)")
 
     # Health check endpoint
     app.router.add_get("/health", health_handler)
@@ -168,6 +191,8 @@ async def run_api_server(
     storage: Storage | None = None,
     db_path: Path | str | None = None,
     web_root: Path | str | None = None,
+    relay_mode: bool = False,
+    poll_interval: int = 300,
 ) -> None:
     """Run the API server.
 
@@ -177,8 +202,16 @@ async def run_api_server(
         storage: Existing storage instance
         db_path: Path to database file
         web_root: Path to web client files
+        relay_mode: Enable relay mode with polling
+        poll_interval: Polling interval in seconds
     """
-    app = create_app(storage=storage, db_path=db_path, web_root=web_root)
+    app = create_app(
+        storage=storage,
+        db_path=db_path,
+        web_root=web_root,
+        relay_mode=relay_mode,
+        poll_interval=poll_interval,
+    )
 
     runner = web.AppRunner(app)
     await runner.setup()

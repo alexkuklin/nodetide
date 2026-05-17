@@ -705,7 +705,8 @@ def api():
 @click.option("--db-path", type=click.Path(), help="Path to database file")
 @click.option("--web-root", type=click.Path(exists=True), help="Path to web client files")
 @click.option("--relay", is_flag=True, help="Run in relay mode (API only, no web interface)")
-def api_start(host: str, port: int, public: bool, db_path: str | None, web_root: str | None, relay: bool):
+@click.option("--poll-interval", type=int, default=300, help="Polling interval in seconds (relay mode)")
+def api_start(host: str, port: int, public: bool, db_path: str | None, web_root: str | None, relay: bool, poll_interval: int):
     """Start the REST API server.
 
     In relay mode (--relay), only the API is served without the web interface.
@@ -738,7 +739,7 @@ def api_start(host: str, port: int, public: bool, db_path: str | None, web_root:
     if relay:
         web_root = None
         os.environ["NODETIDE_RELAY_MODE"] = "1"
-        click.echo("Running in RELAY mode (API only, no web interface)")
+        click.echo(f"Running in RELAY mode (poll_interval={poll_interval}s)")
 
     click.echo(f"Starting API server on http://{host}:{port}")
     if web_root:
@@ -751,10 +752,27 @@ def api_start(host: str, port: int, public: bool, db_path: str | None, web_root:
     click.echo("  POST /api/identities/{hash}/events - Submit event")
     click.echo("  POST /api/messages         - Publish message")
     click.echo("  GET  /api/messages         - List messages")
+    if relay:
+        click.echo("Relay endpoints:")
+        click.echo("  GET  /api/relay/status     - Relay status")
+        click.echo("  POST /api/relay/identities - Add identity to relay")
+        click.echo("  GET  /api/relay/identities - List relayed identities")
+        click.echo("  DELETE /api/relay/identities/{hash} - Remove from relay")
+        click.echo("  POST /api/relay/polling/suspend - Suspend polling")
+        click.echo("  POST /api/relay/polling/resume  - Resume polling")
+        click.echo("  POST /api/relay/polling/trigger - Poll now")
+        click.echo("  PUT  /api/relay/polling/interval - Set interval")
     click.echo("")
 
     try:
-        asyncio.run(run_api_server(host=host, port=port, db_path=db_path, web_root=web_root))
+        asyncio.run(run_api_server(
+            host=host,
+            port=port,
+            db_path=db_path,
+            web_root=web_root,
+            relay_mode=relay,
+            poll_interval=poll_interval,
+        ))
     except KeyboardInterrupt:
         click.echo("\nStopping API server...")
 

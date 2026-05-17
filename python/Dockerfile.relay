@@ -26,6 +26,7 @@ ENV NODETIDE_HOST=0.0.0.0
 ENV NODETIDE_PORT=4557
 ENV NODETIDE_DB_PATH=/data/nodetide.db
 ENV NODETIDE_RELAY_MODE=1
+ENV NODETIDE_POLL_INTERVAL=300
 
 # Expose API port
 EXPOSE 4557
@@ -35,7 +36,5 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:4557/health')" || exit 1
 
 # Run the API server in relay mode
-CMD ["python", "-m", "nodetide.cli.main", "api", "start", \
-     "--host", "0.0.0.0", \
-     "--port", "4557", \
-     "--relay"]
+# Poll interval can be overridden with --poll-interval or NODETIDE_POLL_INTERVAL
+CMD ["sh", "-c", "python -m nodetide.cli.main api start --host 0.0.0.0 --port 4557 --relay --poll-interval ${NODETIDE_POLL_INTERVAL}"]

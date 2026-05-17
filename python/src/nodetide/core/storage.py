@@ -127,6 +127,22 @@ CREATE TABLE IF NOT EXISTS groups (
     updated_at INTEGER NOT NULL
 );
 
+-- Relayed identities (for relay mode)
+CREATE TABLE IF NOT EXISTS relayed_identities (
+    identity_hash TEXT PRIMARY KEY,
+    distribution_points TEXT,  -- JSON array of distribution point URLs
+    added_at INTEGER NOT NULL,
+    last_polled_at INTEGER,
+    last_poll_success INTEGER,
+    poll_error TEXT
+);
+
+-- Relay configuration
+CREATE TABLE IF NOT EXISTS relay_config (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_messages_sender ON messages(sender_identity);
 CREATE INDEX IF NOT EXISTS idx_messages_recipient ON messages(recipient_identity);
@@ -589,3 +605,113 @@ class Storage:
                 (identity_hash,),
             )
             return True
+
+    # Relay operations
+
+    def add_relayed_identity(
+        self,
+        identity_hash: str,
+        distribution_points: list[str] | None = None,
+    ) -> None:
+        """Add an identity to relay."""
+        import time
+
+        with self.transaction() as cur:
+            cur.execute(
+                """
+                INSERT OR REPLACE INTO relayed_identities
+                (identity_hash, distribution_points, added_at)
+                VALUES (?, ?, ?)
+                """,
+                (
+                    identity_hash,
+                    json.dumps(distribution_points) if distribution_points else None,
+                    int(time.time()),
+                ),
+            )
+
+    def remove_relayed_identity(self, identity_hash: str) -> bool:
+        """Remove an identity from relay. Returns True if it existed."""
+        with self.transaction() as cur:
+            cur.execute(
+                "DELETE FROM relayed_identities WHERE identity_hash = ?",
+                (identity_hash,),
+            )
+            return cur.rowcount > 0
+
+    def list_relayed_identities(self) -> list[dict]:
+        """List all relayed identities."""
+        with self.transaction() as cur:
+            cur.execute("SELECT * FROM relayed_identities ORDER BY added_at DESC")
+            result = []
+            for row in cur.fetchall():
+                d = dict(row)
+                if d.get("distribution_points"):
+                    d["distribution_points"] = json.loads(d["distribution_points"])
+                result.append(d)
+            return result
+
+    def get_relayed_identity(self, identity_hash: str) -> dict | None:
+        """Get a relayed identity."""
+        with self.transaction() as cur:
+            cur.execute(
+                "SELECT * FROM relayed_identities WHERE identity_hash = ?",
+                (identity_hash,),
+            )
+            row = cur.fetchone()
+            if row:
+                d = dict(row)
+                if d.get("distribution_points"):
+                    d["distribution_points"] = json.loads(d["distribution_points"])
+                return d
+            return None
+
+    def update_relayed_identity_poll(
+        self,
+        identity_hash: str,
+        success: bool,
+        error: str | None = None,
+    ) -> None:
+        """Update poll status for a relayed identity."""
+        import time
+
+        with self.transaction() as cur:
+            cur.execute(
+                """
+                UPDATE relayed_identities
+                SET last_polled_at = ?, last_poll_success = ?, poll_error = ?
+                WHERE identity_hash = ?
+                """,
+                (int(time.time()), 1 if success else 0, error, identity_hash),
+            )
+
+    def update_relayed_identity_distribution_points(
+        self,
+        identity_hash: str,
+        distribution_points: list[str],
+    ) -> None:
+        """Update distribution points for a relayed identity."""
+        with self.transaction() as cur:
+            cur.execute(
+                """
+                UPDATE relayed_identities
+                SET distribution_points = ?
+                WHERE identity_hash = ?
+                """,
+                (json.dumps(distribution_points), identity_hash),
+            )
+
+    def get_relay_config(self, key: str, default: str | None = None) -> str | None:
+        """Get a relay configuration value."""
+        with self.transaction() as cur:
+            cur.execute("SELECT value FROM relay_config WHERE key = ?", (key,))
+            row = cur.fetchone()
+            return row["value"] if row else default
+
+    def set_relay_config(self, key: str, value: str) -> None:
+        """Set a relay configuration value."""
+        with self.transaction() as cur:
+            cur.execute(
+                "INSERT OR REPLACE INTO relay_config (key, value) VALUES (?, ?)",
+                (key, value),
+            )

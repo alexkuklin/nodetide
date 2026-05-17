@@ -923,6 +923,127 @@ async def get_message(request: web.Request) -> web.Response:
     })
 
 
+# Relay routes (only active in relay mode)
+
+
+async def relay_status(request: web.Request) -> web.Response:
+    """GET /relay/status - Get relay status."""
+    poller = request.app.get("relay_poller")
+    if not poller:
+        return error_response(ErrorCode.NOT_FOUND, "Relay mode not enabled", 404)
+
+    return web.json_response(poller.get_status())
+
+
+async def relay_add_identity(request: web.Request) -> web.Response:
+    """POST /relay/identities - Add identity to relay."""
+    storage: Storage = request.app["storage"]
+    poller = request.app.get("relay_poller")
+
+    try:
+        data = await request.json()
+        identity_hash = data.get("identity_hash")
+        distribution_points = data.get("distribution_points", [])
+
+        if not identity_hash:
+            return error_response(ErrorCode.INVALID_REQUEST, "identity_hash required", 400)
+
+        # If no distribution points provided, try to fetch from existing sigchain
+        if not distribution_points:
+            sigchain = storage.get_sigchain(identity_hash)
+            if sigchain:
+                for event in sigchain.events:
+                    if hasattr(event, 'distribution_points') and event.distribution_points:
+                        distribution_points = event.distribution_points
+
+        storage.add_relayed_identity(identity_hash, distribution_points)
+
+        # Trigger immediate poll if poller is active
+        if poller and poller.is_running and not poller.is_suspended:
+            poller.trigger_poll()
+
+        return web.json_response({
+            "identity_hash": identity_hash,
+            "distribution_points": distribution_points,
+            "added": True,
+        }, status=201)
+
+    except json.JSONDecodeError:
+        return error_response(ErrorCode.INVALID_REQUEST, "Invalid JSON", 400)
+
+
+async def relay_remove_identity(request: web.Request) -> web.Response:
+    """DELETE /relay/identities/{hash} - Remove identity from relay."""
+    storage: Storage = request.app["storage"]
+    identity_hash = request.match_info["hash"]
+
+    removed = storage.remove_relayed_identity(identity_hash)
+
+    if removed:
+        return web.json_response({"removed": True})
+    else:
+        return error_response(ErrorCode.NOT_FOUND, "Identity not in relay", 404)
+
+
+async def relay_list_identities(request: web.Request) -> web.Response:
+    """GET /relay/identities - List relayed identities."""
+    storage: Storage = request.app["storage"]
+
+    identities = storage.list_relayed_identities()
+
+    return web.json_response({"identities": identities})
+
+
+async def relay_suspend(request: web.Request) -> web.Response:
+    """POST /relay/polling/suspend - Suspend polling."""
+    poller = request.app.get("relay_poller")
+    if not poller:
+        return error_response(ErrorCode.NOT_FOUND, "Relay mode not enabled", 404)
+
+    poller.suspend()
+    return web.json_response({"suspended": True})
+
+
+async def relay_resume(request: web.Request) -> web.Response:
+    """POST /relay/polling/resume - Resume polling."""
+    poller = request.app.get("relay_poller")
+    if not poller:
+        return error_response(ErrorCode.NOT_FOUND, "Relay mode not enabled", 404)
+
+    poller.resume()
+    return web.json_response({"suspended": False})
+
+
+async def relay_poll_now(request: web.Request) -> web.Response:
+    """POST /relay/polling/trigger - Trigger immediate poll."""
+    poller = request.app.get("relay_poller")
+    if not poller:
+        return error_response(ErrorCode.NOT_FOUND, "Relay mode not enabled", 404)
+
+    poller.trigger_poll()
+    return web.json_response({"triggered": True})
+
+
+async def relay_set_interval(request: web.Request) -> web.Response:
+    """PUT /relay/polling/interval - Set polling interval."""
+    poller = request.app.get("relay_poller")
+    if not poller:
+        return error_response(ErrorCode.NOT_FOUND, "Relay mode not enabled", 404)
+
+    try:
+        data = await request.json()
+        interval = int(data.get("interval", 300))
+
+        if interval < 30:
+            return error_response(ErrorCode.INVALID_REQUEST, "Interval must be at least 30 seconds", 400)
+
+        poller.set_interval(interval)
+        return web.json_response({"interval": interval})
+
+    except (json.JSONDecodeError, ValueError):
+        return error_response(ErrorCode.INVALID_REQUEST, "Invalid interval", 400)
+
+
 def setup_routes(app: web.Application) -> None:
     """Setup all API routes."""
 
@@ -960,3 +1081,13 @@ def setup_routes(app: web.Application) -> None:
     app.router.add_post("/api/messages", publish_message)
     app.router.add_get("/api/messages", list_messages)
     app.router.add_get("/api/messages/{hash}", get_message)
+
+    # Relay routes (work in any mode, but poller only in relay mode)
+    app.router.add_get("/api/relay/status", relay_status)
+    app.router.add_post("/api/relay/identities", relay_add_identity)
+    app.router.add_get("/api/relay/identities", relay_list_identities)
+    app.router.add_delete("/api/relay/identities/{hash}", relay_remove_identity)
+    app.router.add_post("/api/relay/polling/suspend", relay_suspend)
+    app.router.add_post("/api/relay/polling/resume", relay_resume)
+    app.router.add_post("/api/relay/polling/trigger", relay_poll_now)
+    app.router.add_put("/api/relay/polling/interval", relay_set_interval)
