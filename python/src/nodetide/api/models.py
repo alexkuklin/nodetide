@@ -18,6 +18,7 @@ class ErrorCode(str, Enum):
     CONFLICT = "conflict"
     STALE_STATE = "stale_state"
     THRESHOLD_NOT_MET = "threshold_not_met"
+    INTERNAL_ERROR = "internal_error"
 
 
 @dataclass

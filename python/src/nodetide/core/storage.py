@@ -362,6 +362,8 @@ class Storage:
     def list_messages(
         self,
         identity_hash: str | None = None,
+        sender_identity: str | None = None,
+        message_type: str | None = None,
         status: str | None = None,
         limit: int = 100,
     ) -> list[dict]:
@@ -372,6 +374,14 @@ class Storage:
         if identity_hash:
             query += " AND (sender_identity = ? OR recipient_identity = ?)"
             params.extend([identity_hash, identity_hash])
+
+        if sender_identity:
+            query += " AND sender_identity = ?"
+            params.append(sender_identity)
+
+        if message_type:
+            query += " AND message_type = ?"
+            params.append(message_type)
 
         if status:
             query += " AND status = ?"
