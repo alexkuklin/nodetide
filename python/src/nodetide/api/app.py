@@ -49,11 +49,19 @@ async def on_startup(app: web.Application) -> None:
     if app.get("relay_poller"):
         await app["relay_poller"].start()
 
+    # Start mDNS announcement if enabled
+    if app.get("relay_mdns"):
+        await app["relay_mdns"].start()
+
     logger.info("API server started")
 
 
 async def on_cleanup(app: web.Application) -> None:
     """Called on application cleanup."""
+    # Stop mDNS announcement
+    if app.get("relay_mdns"):
+        await app["relay_mdns"].stop()
+
     # Stop relay poller
     if app.get("relay_poller"):
         await app["relay_poller"].stop()
@@ -77,6 +85,8 @@ def create_app(
     web_root: Path | str | None = None,
     relay_mode: bool = False,
     poll_interval: int = 300,
+    mdns: bool = False,
+    port: int = 4557,
 ) -> web.Application:
     """Create the API application.
 
@@ -86,6 +96,8 @@ def create_app(
         web_root: Path to web client files (optional)
         relay_mode: Enable relay mode with polling
         poll_interval: Polling interval in seconds (default 300)
+        mdns: Enable mDNS announcement for relay discovery
+        port: Port number for mDNS announcement
 
     Returns:
         Configured aiohttp Application
@@ -119,6 +131,13 @@ def create_app(
             poll_interval=poll_interval,
         )
         logger.info(f"Relay mode enabled (poll_interval={poll_interval}s)")
+
+    # Setup mDNS announcement if enabled
+    mdns = mdns or os.environ.get("NODETIDE_MDNS") == "1"
+    if mdns:
+        from nodetide.relay import RelayMDNS
+        app["relay_mdns"] = RelayMDNS(port=port)
+        logger.info(f"mDNS announcement enabled (port={port})")
 
     # Health check endpoint
     app.router.add_get("/health", health_handler)
@@ -205,6 +224,7 @@ async def run_api_server(
     web_root: Path | str | None = None,
     relay_mode: bool = False,
     poll_interval: int = 300,
+    mdns: bool = False,
 ) -> None:
     """Run the API server.
 
@@ -216,6 +236,7 @@ async def run_api_server(
         web_root: Path to web client files
         relay_mode: Enable relay mode with polling
         poll_interval: Polling interval in seconds
+        mdns: Enable mDNS announcement
     """
     app = create_app(
         storage=storage,
@@ -223,6 +244,8 @@ async def run_api_server(
         web_root=web_root,
         relay_mode=relay_mode,
         poll_interval=poll_interval,
+        mdns=mdns,
+        port=port,
     )
 
     runner = web.AppRunner(app)

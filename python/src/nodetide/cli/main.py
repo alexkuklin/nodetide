@@ -706,7 +706,8 @@ def api():
 @click.option("--web-root", type=click.Path(exists=True), help="Path to web client files")
 @click.option("--relay", is_flag=True, help="Run in relay mode (API only, no web interface)")
 @click.option("--poll-interval", type=int, default=300, help="Polling interval in seconds (relay mode)")
-def api_start(host: str, port: int, public: bool, db_path: str | None, web_root: str | None, relay: bool, poll_interval: int):
+@click.option("--mdns", is_flag=True, help="Enable mDNS announcement for local network discovery")
+def api_start(host: str, port: int, public: bool, db_path: str | None, web_root: str | None, relay: bool, poll_interval: int, mdns: bool):
     """Start the REST API server.
 
     In relay mode (--relay), only the API is served without the web interface.
@@ -741,6 +742,11 @@ def api_start(host: str, port: int, public: bool, db_path: str | None, web_root:
         os.environ["NODETIDE_RELAY_MODE"] = "1"
         click.echo(f"Running in RELAY mode (poll_interval={poll_interval}s)")
 
+    # mDNS announcement
+    if mdns:
+        os.environ["NODETIDE_MDNS"] = "1"
+        click.echo(f"mDNS announcement enabled (_nodetide._tcp.local.)")
+
     click.echo(f"Starting API server on http://{host}:{port}")
     if web_root:
         click.echo(f"Serving web client from {web_root}")
@@ -772,6 +778,7 @@ def api_start(host: str, port: int, public: bool, db_path: str | None, web_root:
             web_root=web_root,
             relay_mode=relay,
             poll_interval=poll_interval,
+            mdns=mdns,
         ))
     except KeyboardInterrupt:
         click.echo("\nStopping API server...")
