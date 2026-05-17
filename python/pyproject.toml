@@ -26,6 +26,7 @@ dependencies = [
     "aiohttp>=3.9",
     "pydantic>=2.0",
     "casbin>=1.30",
+    "pyjwt>=2.8",
 ]
 
 [project.optional-dependencies]

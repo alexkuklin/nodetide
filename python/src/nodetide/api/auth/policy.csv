@@ -15,6 +15,7 @@ p, anonymous, /api/messages/:id, GET
 p, anonymous, /api/session, POST
 p, anonymous, /api/session, GET
 p, anonymous, /api/session, DELETE
+p, anonymous, /api/auth/token, POST
 p, anonymous, /api/verify, POST
 p, anonymous, /api/lookup/:id, GET
 p, anonymous, /api/trust/*, GET
