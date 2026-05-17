@@ -725,7 +725,7 @@
             <div class="card-header">
               <span class="card-title">Share Identity</span>
             </div>
-            <div x-data="qrManager" x-init="showIdentityQR(identity?.identityHash)">
+            <div x-data="qrManager" x-init="showIdentityQR(identity?.identityHash, distributionPoints, sigchain?.[0]?.pubkey)">
               <div class="text-center mb-1">
                 <div x-ref="qrContainer" style="display: inline-block; background: white; padding: 1rem; border-radius: 0.5rem;"></div>
               </div>

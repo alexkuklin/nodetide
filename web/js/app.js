@@ -576,8 +576,19 @@
   // QR CODE
   // ============================================
 
-  function createIdentityQR(identityHash) {
-    return `nodetide:id:${identityHash}`;
+  function createIdentityQR(identityHash, distributionPoints = [], signingKey = null) {
+    // Create a compact JSON payload with identity info
+    const payload = {
+      v: 1,  // version
+      id: identityHash,
+    };
+    if (distributionPoints && distributionPoints.length > 0) {
+      payload.dp = distributionPoints;
+    }
+    if (signingKey) {
+      payload.pk = signingKey;
+    }
+    return JSON.stringify(payload);
   }
 
   // ============================================
@@ -972,7 +983,7 @@
       identityHash: null,
       scanning: false,
 
-      async showIdentityQR(identityHash) {
+      async showIdentityQR(identityHash, distributionPoints = [], signingKey = null) {
         if (!identityHash) return;
         this.identityHash = identityHash;
 
@@ -982,7 +993,9 @@
           container.innerHTML = '';
           const canvas = document.createElement('canvas');
           container.appendChild(canvas);
-          QRCode.toCanvas(canvas, createIdentityQR(identityHash), {
+          const qrData = createIdentityQR(identityHash, distributionPoints, signingKey);
+          console.log('[showIdentityQR] QR data:', qrData);
+          QRCode.toCanvas(canvas, qrData, {
             width: 200,
             margin: 2,
             color: { dark: '#1a1a2e', light: '#ffffff' },
