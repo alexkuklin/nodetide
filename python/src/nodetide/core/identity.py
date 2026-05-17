@@ -685,7 +685,17 @@ class Sigchain:
         revoked: set[str] = set()
 
         for event in self.events:
-            if isinstance(event, AddDeviceEvent):
+            # Genesis pubkey is the initial device for personal identities
+            if isinstance(event, GenesisEvent):
+                devices[event.pubkey] = DeviceInfo(
+                    pubkey=event.pubkey,
+                    encryption_pubkey=event.encryption_pubkey,
+                    label="Primary",
+                    capabilities=["sign", "encrypt"],
+                    added_at=event.timestamp,
+                    expires=None,
+                )
+            elif isinstance(event, AddDeviceEvent):
                 # Check if already expired at at_time
                 if event.expires and event.expires < at_time:
                     continue
