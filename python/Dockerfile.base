@@ -14,18 +14,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libffi-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Python dependencies
-# These are pinned to match pyproject.toml requirements
-RUN pip install --no-cache-dir \
-    "cryptography>=41.0" \
-    "pynacl>=1.5" \
-    "zeroconf>=0.80" \
-    "click>=8.0" \
-    "aiosqlite>=0.19" \
-    "aiohttp>=3.9" \
-    "pydantic>=2.0" \
-    hatchling \
-    build
+# Copy pyproject.toml and create stub package for dependency installation
+COPY python/pyproject.toml .
+COPY README.md .
+RUN mkdir -p src/nodetide && touch src/nodetide/__init__.py
+
+# Install build tools and dependencies from pyproject.toml
+RUN pip install --no-cache-dir hatchling build \
+    && pip install --no-cache-dir . \
+    && rm -rf src/
 
 # Install runtime dependencies and create user
 RUN apt-get update && apt-get install -y --no-install-recommends \
