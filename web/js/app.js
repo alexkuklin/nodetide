@@ -1116,6 +1116,8 @@
       messageText: '',
       loading: false,
       publishing: false,
+      filterMine: false, // Show only my messages
+      senderInfo: {}, // Cache of sender identity info
 
       init() {
         this.$watch('$store.app.currentView', (view) => {
@@ -1129,14 +1131,44 @@
       async load() {
         this.loading = true;
         try {
-          const data = await api.listMessages();
+          const sender = this.filterMine ? Alpine.store('identity').activeHash : null;
+          const data = await api.listMessages(sender);
           this.messages = data.messages || [];
+
+          // Fetch identity info for all unique senders
+          const senders = [...new Set(this.messages.map(m => m.sender))];
+          for (const senderHash of senders) {
+            if (!this.senderInfo[senderHash]) {
+              try {
+                const identity = await api.getIdentity(senderHash);
+                this.senderInfo[senderHash] = identity;
+              } catch {
+                // Identity not found or error - use hash as fallback
+                this.senderInfo[senderHash] = { name: null, identity_hash: senderHash };
+              }
+            }
+          }
         } catch (e) {
           console.warn('Failed to load messages:', e);
           this.messages = [];
         } finally {
           this.loading = false;
         }
+      },
+
+      getSenderName(senderHash) {
+        const info = this.senderInfo[senderHash];
+        if (info?.name) return info.name;
+        return senderHash?.slice(0, 12) + '...';
+      },
+
+      isOwnMessage(senderHash) {
+        return senderHash === Alpine.store('identity').activeHash;
+      },
+
+      toggleFilter() {
+        this.filterMine = !this.filterMine;
+        this.load();
       },
 
       async publish() {

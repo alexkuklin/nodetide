@@ -405,7 +405,12 @@
       background: var(--bg-primary);
       border-radius: 0.25rem;
       margin-bottom: 0.5rem;
-      border-left: 3px solid var(--accent);
+      border-left: 3px solid var(--bg-tertiary);
+    }
+
+    .message-item.message-own {
+      border-left-color: var(--accent);
+      background: var(--bg-secondary);
     }
 
     .message-header {
@@ -416,9 +421,19 @@
     }
 
     .message-sender {
-      font-family: monospace;
       font-size: 0.85rem;
-      color: var(--accent);
+    }
+
+    .message-sender strong {
+      color: var(--text-primary);
+    }
+
+    .badge-small {
+      font-size: 0.65rem;
+      padding: 0.1rem 0.4rem;
+      margin-left: 0.25rem;
+      background: var(--accent);
+      color: white;
     }
 
     .message-time {
@@ -1011,16 +1026,25 @@
       <div class="card">
         <div class="card-header">
           <span class="card-title">Public Messages</span>
-          <button class="btn" @click="load()">Refresh</button>
+          <div class="flex gap-1">
+            <button class="btn btn-small" :class="filterMine ? 'btn-secondary' : ''" @click="toggleFilter()">
+              <span x-text="filterMine ? 'Mine Only' : 'All'"></span>
+            </button>
+            <button class="btn btn-small" @click="load()">Refresh</button>
+          </div>
         </div>
 
         <p x-show="loading" class="text-muted">Loading...</p>
         <p x-show="!loading && messages.length === 0" class="text-muted">No messages yet.</p>
 
         <template x-for="msg in messages" :key="msg.created_at">
-          <div class="message-item">
+          <div class="message-item" :class="isOwnMessage(msg.sender) ? 'message-own' : ''">
             <div class="message-header">
-              <span class="message-sender" x-text="msg.sender?.slice(0, 12) + '...'"></span>
+              <span class="message-sender">
+                <strong x-text="getSenderName(msg.sender)"></strong>
+                <span class="text-muted text-small" x-text="'(' + msg.sender?.slice(0, 8) + '...)'"></span>
+                <span x-show="isOwnMessage(msg.sender)" class="badge badge-small">You</span>
+              </span>
               <span class="message-time" x-text="new Date(msg.created_at * 1000).toLocaleString()"></span>
             </div>
             <div class="message-content" x-text="msg.content?.body || JSON.stringify(msg.content)"></div>
