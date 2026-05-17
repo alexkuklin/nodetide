@@ -2,7 +2,7 @@
  * Service Worker - offline support for Nodetide web client
  */
 
-const CACHE_NAME = 'nodetide-v6';
+const CACHE_NAME = 'nodetide-v7';
 const STATIC_ASSETS = [
   '/',
   '/index.html',
@@ -56,7 +56,7 @@ self.addEventListener('fetch', (event) => {
   }
 
   // CDN requests - pass through to network (don't intercept)
-  if (url.hostname.includes('cdn.jsdelivr.net')) {
+  if (url.hostname.includes('cdn.jsdelivr.net') || url.hostname.includes('unpkg.com')) {
     return;
   }
 
