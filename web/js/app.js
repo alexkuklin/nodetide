@@ -249,10 +249,12 @@
 
     async createIdentityWithPassword(name, password, distributionPoints = null) {
       console.log('[createIdentityWithPassword] starting, name:', name);
-      const keyPair = Crypto.generateKeyPair();
-      console.log('[createIdentityWithPassword] keyPair generated');
 
-      // Create genesis event to compute identity hash (must match server computation)
+      // Generate master key pair (used only for identity management)
+      const masterKeyPair = Crypto.generateKeyPair();
+      console.log('[createIdentityWithPassword] masterKeyPair generated');
+
+      // Create genesis event with master key
       const timestamp = Math.floor(Date.now() / 1000);
       const genesisEvent = {
         version: 1,
@@ -261,38 +263,68 @@
         hash_alg: 'sha256',
         timestamp,
         prev: null,
-        signed_by: keyPair.signing.publicKey,
-        pubkey: keyPair.signing.publicKey,
-        encryption_pubkey: keyPair.encryption.publicKey,
+        signed_by: masterKeyPair.signing.publicKey,
+        pubkey: masterKeyPair.signing.publicKey,
+        encryption_pubkey: masterKeyPair.encryption.publicKey,
         identity_type: 'personal',
         name: name || null,
         ephemeral: false,
         ownership_proof: null,
         distribution_points: distributionPoints,
       };
-      const signable = canonicalize(genesisEvent);
-      genesisEvent.signature = Crypto.sign(signable, keyPair.signing.secretKey);
+      const genesisSignable = canonicalize(genesisEvent);
+      genesisEvent.signature = Crypto.sign(genesisSignable, masterKeyPair.signing.secretKey);
 
       // Identity hash = hash of the complete signed genesis event
       const identityHash = await sha256(canonicalize(genesisEvent));
       console.log('[createIdentityWithPassword] identityHash:', identityHash.slice(0, 16) + '...');
 
-      const encryptedKeys = await Crypto.encryptWithPassword(keyPair, password);
+      // Generate device key pair (used for daily operations)
+      const deviceKeyPair = Crypto.generateKeyPair();
+      console.log('[createIdentityWithPassword] deviceKeyPair generated');
+
+      // Create AddDevice event signed by master key
+      const genesisHash = await sha256(canonicalize(genesisEvent));
+      const addDeviceEvent = {
+        version: 1,
+        type: 'add_device',
+        alg: 'ed25519',
+        hash_alg: 'sha256',
+        timestamp: timestamp + 1, // 1 second after genesis
+        prev: genesisHash,
+        signed_by: masterKeyPair.signing.publicKey,
+        device_pubkey: deviceKeyPair.signing.publicKey,
+        device_encryption_pubkey: deviceKeyPair.encryption.publicKey,
+        label: 'Web Browser',
+        capabilities: ['sign', 'encrypt', 'decrypt'],
+        expires: null,
+      };
+      const addDeviceSignable = canonicalize(addDeviceEvent);
+      addDeviceEvent.signature = Crypto.sign(addDeviceSignable, masterKeyPair.signing.secretKey);
+      console.log('[createIdentityWithPassword] addDeviceEvent created');
+
+      // Store device keys (for daily operations) and master keys (for identity management)
+      const encryptedDeviceKeys = await Crypto.encryptWithPassword(deviceKeyPair, password);
+      const encryptedMasterKeys = await Crypto.encryptWithPassword(masterKeyPair, password);
 
       const identity = {
         identityHash,
         name: name || '',
         createdAt: Date.now(),
         storageMethod: StorageMethod.PASSWORD,
-        encryptedKeys,
-        signingPubkey: keyPair.signing.publicKey,
-        encryptionPubkey: keyPair.encryption.publicKey,
+        encryptedKeys: encryptedDeviceKeys, // Device keys for daily use
+        encryptedMasterKeys, // Master keys for identity management
+        signingPubkey: deviceKeyPair.signing.publicKey, // Device pubkey
+        encryptionPubkey: deviceKeyPair.encryption.publicKey,
+        masterSigningPubkey: masterKeyPair.signing.publicKey, // Master pubkey
         distributionPoints: distributionPoints,
-        genesisEvent, // Store for later sync
+        genesisEvent,
+        addDeviceEvent, // Store for later sync
       };
 
       this._saveIdentity(identity);
-      return { identity, keyPair };
+      // Return device key pair for operations (not master)
+      return { identity, keyPair: deviceKeyPair, masterKeyPair };
     },
 
     async unlockIdentity(identityHash, password) {
@@ -706,14 +738,20 @@
           console.log('[createIdentity] identity.distributionPoints:', result.identity.distributionPoints);
 
           try {
-            // Use stored genesis event to ensure hash matches
+            // Submit genesis event to create identity on server
             console.log('[createIdentity] syncing genesis event to server');
             await api.submitGenesisEvent(result.identity.genesisEvent);
             console.log('[createIdentity] api.submitGenesisEvent succeeded');
+
+            // Submit AddDevice event to register the device key
+            console.log('[createIdentity] syncing addDeviceEvent to server');
+            await api.submitEvent(result.identity.identityHash, result.identity.addDeviceEvent);
+            console.log('[createIdentity] api.submitEvent (addDevice) succeeded');
           } catch (e) {
             console.warn('[createIdentity] Failed to register identity with API:', e);
           }
 
+          // Store device key for operations (not master key)
           SessionKeys.set(result.identity.identityHash, result.keyPair);
           Alpine.store('identity').setActive(result.identity.identityHash);
 
