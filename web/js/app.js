@@ -56,17 +56,24 @@
   }
 
   function canonicalize(obj) {
-    // Sort keys and create compact JSON (no whitespace in structure)
-    // Note: JSON.stringify with sorted replacer produces compact output
-    const sortedKeys = Object.keys(obj).sort();
-    const sorted = {};
-    for (const key of sortedKeys) {
-      if (obj[key] !== undefined) {
-        sorted[key] = obj[key];
+    // Recursively sort keys and create compact JSON (no whitespace in structure)
+    function sortRecursive(val) {
+      if (val === null || typeof val !== 'object') {
+        return val;
       }
+      if (Array.isArray(val)) {
+        return val.map(sortRecursive);
+      }
+      const sortedKeys = Object.keys(val).sort();
+      const sorted = {};
+      for (const key of sortedKeys) {
+        if (val[key] !== undefined) {
+          sorted[key] = sortRecursive(val[key]);
+        }
+      }
+      return sorted;
     }
-    // No .replace() - that would corrupt spaces inside string values!
-    return JSON.stringify(sorted);
+    return JSON.stringify(sortRecursive(obj));
   }
 
   async function sha256(data) {
