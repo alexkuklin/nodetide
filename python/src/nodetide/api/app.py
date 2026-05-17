@@ -169,24 +169,30 @@ def create_app(
             if (web_path / "js").exists():
                 app.router.add_static("/js/", web_path / "js", name="js")
 
-            # Serve manifest.json
-            async def manifest_handler(request: web.Request) -> web.FileResponse:
-                return web.FileResponse(web_path / "manifest.json")
+            # Serve root-level files (manifest, service worker, favicons)
+            root_files = [
+                "manifest.json",
+                "sw.js",
+                "favicon.svg",
+                "favicon.ico",
+                "favicon-16x16.png",
+                "favicon-32x32.png",
+                "favicon-192x192.png",
+                "favicon-512x512.png",
+                "apple-touch-icon.png",
+                "android-chrome-192x192.png",
+                "android-chrome-512x512.png",
+            ]
 
-            # Serve service worker
-            async def sw_handler(request: web.Request) -> web.FileResponse:
-                return web.FileResponse(web_path / "sw.js")
-
-            # Serve icon
-            async def icon_handler(request: web.Request) -> web.FileResponse:
-                return web.FileResponse(web_path / "icon.svg")
-
-            if (web_path / "manifest.json").exists():
-                app.router.add_get("/manifest.json", manifest_handler)
-            if (web_path / "sw.js").exists():
-                app.router.add_get("/sw.js", sw_handler)
-            if (web_path / "icon.svg").exists():
-                app.router.add_get("/icon.svg", icon_handler)
+            for filename in root_files:
+                file_path = web_path / filename
+                if file_path.exists():
+                    # Create handler with closure to capture file_path
+                    def make_handler(fp: Path):
+                        async def handler(request: web.Request) -> web.FileResponse:
+                            return web.FileResponse(fp)
+                        return handler
+                    app.router.add_get(f"/{filename}", make_handler(file_path))
 
     return app
 

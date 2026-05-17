@@ -1,0 +1,73 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <defs>
+    <style>
+      @media (prefers-color-scheme: light) {
+        .bg { fill: #ffffff; }
+        .ring { stroke: #6366f1; }
+        .center { fill: #6366f1; }
+        .satellite { fill: #818cf8; }
+        .spoke { stroke: #6366f1; }
+        .wave { stroke: #6366f1; }
+      }
+      @media (prefers-color-scheme: dark) {
+        .bg { fill: #0f172a; }
+        .ring { stroke: #818cf8; }
+        .center { fill: #818cf8; }
+        .satellite { fill: #a5b4fc; }
+        .spoke { stroke: #818cf8; }
+        .wave { stroke: #818cf8; }
+      }
+    </style>
+  </defs>
+
+  <!-- Background -->
+  <rect width="64" height="64" rx="12" class="bg" fill="#0f172a"/>
+
+  <!-- Dashed orbit ring -->
+  <circle cx="32" cy="30" r="18.5"
+    fill="none"
+    class="ring"
+    stroke="#818cf8"
+    stroke-width="1.4"
+    stroke-dasharray="4.2 2.8"/>
+
+  <!-- Spokes (center to each satellite) -->
+  <line x1="32" y1="24" x2="32" y2="13" class="spoke" stroke="#6366f1" stroke-width="1" opacity="0.7"/>
+  <line x1="32" y1="24" x2="48" y2="21" class="spoke" stroke="#6366f1" stroke-width="1" opacity="0.7"/>
+  <line x1="32" y1="36" x2="48" y2="39" class="spoke" stroke="#6366f1" stroke-width="1" opacity="0.7"/>
+  <line x1="32" y1="36" x2="32" y2="49" class="spoke" stroke="#6366f1" stroke-width="1" opacity="0.7"/>
+  <line x1="32" y1="36" x2="16" y2="39" class="spoke" stroke="#6366f1" stroke-width="1" opacity="0.7"/>
+  <line x1="32" y1="24" x2="16" y2="21" class="spoke" stroke="#6366f1" stroke-width="1" opacity="0.7"/>
+
+  <!-- Satellite nodes (6, evenly on orbit) -->
+  <!-- top -->
+  <circle cx="32" cy="11.5" r="3.2" fill="#a5b4fc" class="satellite"/>
+  <!-- top-right -->
+  <circle cx="48.0" cy="20.8" r="3.2" fill="#a5b4fc" class="satellite"/>
+  <!-- bottom-right -->
+  <circle cx="48.0" cy="39.2" r="3.2" fill="#a5b4fc" class="satellite"/>
+  <!-- bottom -->
+  <circle cx="32" cy="48.5" r="3.2" fill="#a5b4fc" class="satellite"/>
+  <!-- bottom-left -->
+  <circle cx="16.0" cy="39.2" r="3.2" fill="#a5b4fc" class="satellite"/>
+  <!-- top-left -->
+  <circle cx="16.0" cy="20.8" r="3.2" fill="#a5b4fc" class="satellite"/>
+
+  <!-- Center node — self-sovereign identity -->
+  <circle cx="32" cy="30" r="7" fill="#6366f1" class="center"/>
+  <!-- lock body -->
+  <rect x="29.5" y="30.5" width="5" height="4" rx="0.8" fill="#0f172a"/>
+  <!-- lock shackle -->
+  <path d="M30.3 30.5 Q30.3 27.8 32 27.8 Q33.7 27.8 33.7 30.5"
+    fill="none" stroke="#0f172a" stroke-width="1.2" stroke-linecap="round"/>
+  <!-- lock keyhole dot -->
+  <circle cx="32" cy="32.8" r="0.7" fill="#6366f1"/>
+
+  <!-- Subtle tide wave at bottom -->
+  <path d="M18 53.5 Q22 50.5 26 53.5 Q30 56.5 34 53.5 Q38 50.5 42 53.5 Q46 56.5 48 53.5"
+    fill="none"
+    stroke="#6366f1"
+    stroke-width="1.5"
+    stroke-linecap="round"
+    opacity="0.55"/>
+</svg>
