@@ -4,15 +4,20 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from pathlib import Path
-from typing import Any, Callable, Awaitable
+from typing import Callable, Awaitable
 
 import casbin
 from aiohttp import web
 
 from nodetide.api.auth.sessions import extract_bearer_token
+from nodetide.core.crypto import VerifyKey
 
 logger = logging.getLogger(__name__)
+
+# Maximum age of signed request (5 minutes)
+MAX_TIMESTAMP_AGE = 300
 
 # Get the directory containing this file for loading policy files
 AUTH_DIR = Path(__file__).parent
@@ -48,6 +53,7 @@ class CasbinAuth:
         Returns:
             - "localhost" if request is from localhost
             - "token_holder" if valid admin token is provided
+            - "authenticated" if valid identity signature is provided
             - "anonymous" otherwise
         """
         # Check for localhost
@@ -73,7 +79,97 @@ class CasbinAuth:
             if token == self.admin_token:
                 return "token_holder"
 
+        # Check for identity-based authentication
+        identity_hash = request.headers.get("X-Identity")
+        timestamp_str = request.headers.get("X-Timestamp")
+        signature = request.headers.get("X-Signature")
+
+        if identity_hash and timestamp_str and signature:
+            verified, identity = self._verify_identity_auth(
+                request, identity_hash, timestamp_str, signature
+            )
+            if verified:
+                # Store authenticated identity in request for later use
+                request["auth_identity"] = identity
+                return "authenticated"
+
         return "anonymous"
+
+    def _verify_identity_auth(
+        self,
+        request: web.Request,
+        identity_hash: str,
+        timestamp_str: str,
+        signature: str,
+    ) -> tuple[bool, str | None]:
+        """Verify identity-based authentication.
+
+        The client signs: "method:path:timestamp"
+        with a valid key for the identity (master or device key).
+
+        Args:
+            request: The aiohttp request
+            identity_hash: The identity hash
+            timestamp_str: Unix timestamp as string
+            signature: Hex-encoded signature
+
+        Returns:
+            Tuple of (is_verified, identity_hash or None)
+        """
+        from nodetide.core.storage import Storage
+        from nodetide.core.identity import Sigchain
+
+        try:
+            timestamp = int(timestamp_str)
+        except ValueError:
+            logger.debug(f"Invalid timestamp format: {timestamp_str}")
+            return False, None
+
+        # Check timestamp freshness
+        now = int(time.time())
+        if abs(now - timestamp) > MAX_TIMESTAMP_AGE:
+            logger.debug(f"Timestamp too old or in future: {timestamp}")
+            return False, None
+
+        # Get storage from app
+        storage: Storage | None = request.app.get("storage")
+        if not storage:
+            logger.warning("No storage available for identity verification")
+            return False, None
+
+        # Load sigchain for identity
+        events = storage.get_sigchain(identity_hash)
+        if not events:
+            logger.debug(f"Identity not found: {identity_hash}")
+            return False, None
+
+        sigchain = Sigchain.from_events(events)
+
+        # Build the signed message
+        message = f"{request.method}:{request.path}:{timestamp}"
+        message_bytes = message.encode("utf-8")
+
+        # Get all valid signing keys (master + active devices)
+        valid_keys = []
+        master_key = sigchain.get_current_master_key()
+        if master_key:
+            valid_keys.append(master_key)
+
+        for device in sigchain.get_active_devices():
+            valid_keys.append(device.pubkey)
+
+        # Try to verify with each valid key
+        for key_hex in valid_keys:
+            try:
+                verify_key = VerifyKey.from_hex(key_hex)
+                if verify_key.verify_hex(message_bytes, signature):
+                    logger.debug(f"Identity auth verified: {identity_hash}")
+                    return True, identity_hash
+            except Exception:
+                continue
+
+        logger.debug(f"Identity auth failed: no valid signature for {identity_hash}")
+        return False, None
 
     def enforce(self, subject: str, obj: str, action: str) -> bool:
         """Check if the request is allowed.

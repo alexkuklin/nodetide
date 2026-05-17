@@ -24,11 +24,17 @@ p, anonymous, /api/trust/*, POST
 p, anonymous, /api/relay/status, GET
 p, anonymous, /api/relay/identities, GET
 
-# Relay configuration - admin only
+# Relay configuration - admin or authenticated identity
 p, admin, /api/relay/identities, POST
 p, admin, /api/relay/identities/:id, DELETE
 p, admin, /api/relay/polling/*, POST
 p, admin, /api/relay/polling/*, PUT
+
+# Authenticated identity can manage relay subscriptions
+p, authenticated, /api/relay/identities, POST
+p, authenticated, /api/relay/identities/:id, DELETE
+p, authenticated, /api/relay/polling/*, POST
+p, authenticated, /api/relay/polling/*, PUT
 
 # Role assignments
 # localhost and token holders are admins
