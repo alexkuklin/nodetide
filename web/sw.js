@@ -2,7 +2,7 @@
  * Service Worker - offline support for Nodetide web client
  */
 
-const CACHE_NAME = 'nodetide-v4';
+const CACHE_NAME = 'nodetide-v5';
 const STATIC_ASSETS = [
   '/',
   '/index.html',
@@ -14,6 +14,8 @@ const STATIC_ASSETS = [
 const CDN_ASSETS = [
   'https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js',
   'https://cdn.jsdelivr.net/npm/tweetnacl@1.0.3/nacl-fast.min.js',
+  'https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js',
+  'https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js',
 ];
 
 // Install - cache static assets
