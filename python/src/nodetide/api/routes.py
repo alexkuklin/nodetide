@@ -851,8 +851,8 @@ async def publish_message(request: web.Request) -> web.Response:
         if not master_key:
             return error_response(ErrorCode.INVALID_SIGCHAIN, "No master key for sender", 400)
 
-        from nodetide.core.crypto import SigningPublicKey
-        pubkey = SigningPublicKey.from_hex(master_key)
+        from nodetide.core.crypto import VerifyKey
+        pubkey = VerifyKey.from_hex(master_key)
         if not pubkey.verify_hex(signable.encode(), msg.signature):
             return error_response(ErrorCode.INVALID_SIGNATURE, "Invalid message signature", 400)
 
