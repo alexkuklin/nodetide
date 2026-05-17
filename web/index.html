@@ -495,6 +495,44 @@
       cursor: pointer;
     }
 
+    /* Raw JSON display */
+    .raw-json {
+      background: var(--bg-primary);
+      border: 1px solid var(--border);
+      border-radius: 0.25rem;
+      padding: 0.75rem;
+      font-family: 'SF Mono', 'Monaco', 'Consolas', monospace;
+      font-size: 0.75rem;
+      line-height: 1.4;
+      white-space: pre-wrap;
+      word-break: break-all;
+      overflow-x: auto;
+      max-height: 400px;
+      overflow-y: auto;
+      color: var(--text-secondary);
+    }
+
+    .raw-toggle {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--text-secondary);
+      padding: 0.25rem 0.5rem;
+      border-radius: 0.25rem;
+      cursor: pointer;
+      font-size: 0.75rem;
+    }
+
+    .raw-toggle:hover {
+      background: var(--bg-tertiary);
+      color: var(--text-primary);
+    }
+
+    .raw-toggle.active {
+      background: var(--bg-tertiary);
+      border-color: var(--accent);
+      color: var(--text-primary);
+    }
+
     /* Utility */
     .text-center { text-align: center; }
     .text-muted { color: var(--text-secondary); }
@@ -721,26 +759,36 @@
 
       <template x-if="identity">
         <div class="grid grid-2">
-          <div class="card">
+          <div class="card" x-data="{ showRaw: false }">
             <div class="card-header">
               <span class="card-title">Identity Info</span>
+              <button class="raw-toggle" :class="{ active: showRaw }" @click="showRaw = !showRaw">
+                <span x-text="showRaw ? 'Formatted' : 'Raw'"></span>
+              </button>
             </div>
-            <div class="form-group">
-              <label>Name</label>
-              <div x-text="identity.name || 'Unnamed'"></div>
-            </div>
-            <div class="form-group">
-              <label>Identity Hash</label>
-              <div class="identity-hash" style="word-break: break-all" x-text="identity.identityHash"></div>
-            </div>
-            <div class="form-group">
-              <label>Signing Public Key</label>
-              <div class="identity-hash" style="word-break: break-all" x-text="identity.signingPubkey"></div>
-            </div>
-            <div class="form-group">
-              <label>Created</label>
-              <div x-text="new Date(identity.createdAt).toLocaleString()"></div>
-            </div>
+            <template x-if="!showRaw">
+              <div>
+                <div class="form-group">
+                  <label>Name</label>
+                  <div x-text="identity.name || 'Unnamed'"></div>
+                </div>
+                <div class="form-group">
+                  <label>Identity Hash</label>
+                  <div class="identity-hash" style="word-break: break-all" x-text="identity.identityHash"></div>
+                </div>
+                <div class="form-group">
+                  <label>Signing Public Key</label>
+                  <div class="identity-hash" style="word-break: break-all" x-text="identity.signingPubkey"></div>
+                </div>
+                <div class="form-group">
+                  <label>Created</label>
+                  <div x-text="new Date(identity.createdAt).toLocaleString()"></div>
+                </div>
+              </div>
+            </template>
+            <template x-if="showRaw">
+              <pre class="raw-json" x-text="JSON.stringify(identity, null, 2)"></pre>
+            </template>
           </div>
 
           <div class="card">
@@ -803,55 +851,75 @@
             </template>
           </div>
 
-          <div class="card">
+          <div class="card" x-data="{ showRaw: false }">
             <div class="card-header">
               <span class="card-title">Devices (<span x-text="activeDevices.length"></span>)</span>
+              <button class="raw-toggle" :class="{ active: showRaw }" @click="showRaw = !showRaw">
+                <span x-text="showRaw ? 'Formatted' : 'Raw'"></span>
+              </button>
             </div>
-            <template x-if="activeDevices.length === 0">
+            <template x-if="activeDevices.length === 0 && !showRaw">
               <p class="text-muted">No additional devices.</p>
             </template>
-            <template x-for="device in activeDevices">
-              <div class="identity-item">
-                <div class="identity-info">
-                  <div class="identity-name" x-text="device.label || 'Unnamed Device'"></div>
-                  <div class="identity-hash" x-text="device.pubkey.slice(0, 16) + '...'"></div>
-                  <div class="text-small">
-                    <template x-for="cap in device.capabilities">
-                      <span class="badge" x-text="cap" style="margin-right: 0.25rem"></span>
-                    </template>
+            <template x-if="!showRaw">
+              <div>
+                <template x-for="device in activeDevices">
+                  <div class="identity-item">
+                    <div class="identity-info">
+                      <div class="identity-name" x-text="device.label || 'Unnamed Device'"></div>
+                      <div class="identity-hash" x-text="device.pubkey.slice(0, 16) + '...'"></div>
+                      <div class="text-small">
+                        <template x-for="cap in device.capabilities">
+                          <span class="badge" x-text="cap" style="margin-right: 0.25rem"></span>
+                        </template>
+                      </div>
+                    </div>
                   </div>
-                </div>
+                </template>
               </div>
+            </template>
+            <template x-if="showRaw">
+              <pre class="raw-json" x-text="JSON.stringify(activeDevices, null, 2)"></pre>
             </template>
           </div>
 
-          <div class="card">
+          <div class="card" x-data="{ showRaw: false }">
             <div class="card-header">
               <span class="card-title">Sigchain (<span x-text="sigchain.length"></span> events)</span>
+              <button class="raw-toggle" :class="{ active: showRaw }" @click="showRaw = !showRaw">
+                <span x-text="showRaw ? 'Formatted' : 'Raw'"></span>
+              </button>
             </div>
             <template x-if="sigchain.length === 0">
               <p class="text-muted" x-show="!loading">Sigchain not synced yet.</p>
             </template>
-            <template x-for="(event, idx) in sigchain.slice().reverse()">
-              <div class="event-item event-expandable" x-data="{ expanded: false }">
-                <div class="event-header" @click="expanded = !expanded" style="cursor: pointer;">
-                  <div class="event-type" x-text="event.type"></div>
-                  <div class="event-time" x-text="new Date(event.timestamp * 1000).toLocaleString()"></div>
-                  <span class="event-toggle" x-text="expanded ? '▼' : '▶'"></span>
-                </div>
-                <div class="event-details" x-show="expanded" x-collapse>
-                  <template x-for="[key, value] in Object.entries(event).filter(([k]) => k !== 'signature')">
-                    <div class="event-field">
-                      <span class="event-field-name" x-text="key + ':'"></span>
-                      <span class="event-field-value" x-text="Array.isArray(value) ? value.join(', ') : (typeof value === 'object' && value !== null ? JSON.stringify(value) : String(value))"></span>
+            <template x-if="!showRaw">
+              <div>
+                <template x-for="(event, idx) in sigchain.slice().reverse()">
+                  <div class="event-item event-expandable" x-data="{ expanded: false }">
+                    <div class="event-header" @click="expanded = !expanded" style="cursor: pointer;">
+                      <div class="event-type" x-text="event.type"></div>
+                      <div class="event-time" x-text="new Date(event.timestamp * 1000).toLocaleString()"></div>
+                      <span class="event-toggle" x-text="expanded ? '▼' : '▶'"></span>
                     </div>
-                  </template>
-                  <div class="event-field">
-                    <span class="event-field-name">signature:</span>
-                    <span class="event-field-value text-mono text-small" x-text="event.signature?.slice(0, 32) + '...'"></span>
+                    <div class="event-details" x-show="expanded" x-collapse>
+                      <template x-for="[key, value] in Object.entries(event).filter(([k]) => k !== 'signature')">
+                        <div class="event-field">
+                          <span class="event-field-name" x-text="key + ':'"></span>
+                          <span class="event-field-value" x-text="Array.isArray(value) ? value.join(', ') : (typeof value === 'object' && value !== null ? JSON.stringify(value) : String(value))"></span>
+                        </div>
+                      </template>
+                      <div class="event-field">
+                        <span class="event-field-name">signature:</span>
+                        <span class="event-field-value text-mono text-small" x-text="event.signature?.slice(0, 32) + '...'"></span>
+                      </div>
+                    </div>
                   </div>
-                </div>
+                </template>
               </div>
+            </template>
+            <template x-if="showRaw">
+              <pre class="raw-json" x-text="JSON.stringify(sigchain, null, 2)"></pre>
             </template>
           </div>
         </div>
@@ -1045,16 +1113,26 @@
         <p x-show="!loading && messages.length === 0" class="text-muted">No messages yet.</p>
 
         <template x-for="msg in messages" :key="msg.created_at">
-          <div class="message-item" :class="isOwnMessage(msg.sender) ? 'message-own' : ''">
+          <div class="message-item" :class="isOwnMessage(msg.sender) ? 'message-own' : ''" x-data="{ showRaw: false }">
             <div class="message-header">
               <span class="message-sender">
                 <strong x-text="getSenderName(msg.sender)"></strong>
                 <span class="text-muted text-small" x-text="'(' + msg.sender?.slice(0, 8) + '...)'"></span>
                 <span x-show="isOwnMessage(msg.sender)" class="badge badge-small">You</span>
               </span>
-              <span class="message-time" x-text="new Date(msg.created_at * 1000).toLocaleString()"></span>
+              <div class="flex gap-1" style="align-items: center;">
+                <button class="raw-toggle" :class="{ active: showRaw }" @click="showRaw = !showRaw">
+                  <span x-text="showRaw ? 'Formatted' : 'Raw'"></span>
+                </button>
+                <span class="message-time" x-text="new Date(msg.created_at * 1000).toLocaleString()"></span>
+              </div>
             </div>
-            <div class="message-content" x-text="msg.content?.body || JSON.stringify(msg.content)"></div>
+            <template x-if="!showRaw">
+              <div class="message-content" x-text="msg.content?.body || JSON.stringify(msg.content)"></div>
+            </template>
+            <template x-if="showRaw">
+              <pre class="raw-json" x-text="JSON.stringify(msg, null, 2)"></pre>
+            </template>
           </div>
         </template>
       </div>
