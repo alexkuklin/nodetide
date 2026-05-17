@@ -704,10 +704,23 @@ def api():
 @click.option("--public", is_flag=True, help="Bind to 0.0.0.0 (public access)")
 @click.option("--db-path", type=click.Path(), help="Path to database file")
 @click.option("--web-root", type=click.Path(exists=True), help="Path to web client files")
-def api_start(host: str, port: int, public: bool, db_path: str | None, web_root: str | None):
-    """Start the REST API server."""
+@click.option("--relay", is_flag=True, help="Run in relay mode (API only, no web interface)")
+def api_start(host: str, port: int, public: bool, db_path: str | None, web_root: str | None, relay: bool):
+    """Start the REST API server.
+
+    In relay mode (--relay), only the API is served without the web interface.
+    This is suitable for home servers acting as distribution points.
+
+    Examples:
+      # Run with web interface (default)
+      nodetide api start --public --web-root ./web
+
+      # Run as relay (API only)
+      nodetide api start --public --relay
+    """
     import asyncio
     import logging
+    import os
     from nodetide.api.app import run_api_server
 
     # Configure logging
@@ -721,18 +734,23 @@ def api_start(host: str, port: int, public: bool, db_path: str | None, web_root:
         host = "0.0.0.0"
         click.echo("WARNING: Binding to 0.0.0.0 - API will be publicly accessible")
 
+    # Relay mode disables web interface
+    if relay:
+        web_root = None
+        os.environ["NODETIDE_RELAY_MODE"] = "1"
+        click.echo("Running in RELAY mode (API only, no web interface)")
+
     click.echo(f"Starting API server on http://{host}:{port}")
     if web_root:
         click.echo(f"Serving web client from {web_root}")
     click.echo("Endpoints:")
     click.echo("  GET  /health               - Health check")
-    click.echo("  POST /identities           - Create identity")
-    click.echo("  GET  /identities           - List identities")
-    click.echo("  GET  /identities/{hash}    - Get identity")
-    click.echo("  POST /identities/{hash}/events - Submit event")
-    click.echo("  POST /session              - Create session")
-    click.echo("  GET  /trust/calculate/{hash} - Calculate trust")
-    click.echo("  POST /verify               - Verify sigchain")
+    click.echo("  POST /api/identities       - Create identity")
+    click.echo("  GET  /api/identities       - List identities")
+    click.echo("  GET  /api/identities/{hash} - Get identity")
+    click.echo("  POST /api/identities/{hash}/events - Submit event")
+    click.echo("  POST /api/messages         - Publish message")
+    click.echo("  GET  /api/messages         - List messages")
     click.echo("")
 
     try:

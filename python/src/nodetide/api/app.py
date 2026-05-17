@@ -122,8 +122,9 @@ def create_app(
 
     app.middlewares.append(cors_middleware)
 
-    # Setup static file serving for web client
-    resolved_web_root = web_root or os.environ.get("NODETIDE_WEB_ROOT")
+    # Setup static file serving for web client (unless in relay mode)
+    relay_mode = os.environ.get("NODETIDE_RELAY_MODE") == "1"
+    resolved_web_root = None if relay_mode else (web_root or os.environ.get("NODETIDE_WEB_ROOT"))
     if resolved_web_root:
         web_path = Path(resolved_web_root)
         if web_path.exists():
