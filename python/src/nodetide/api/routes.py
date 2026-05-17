@@ -848,12 +848,16 @@ async def publish_message(request: web.Request) -> web.Response:
         msg = PublicMessage.from_dict(message_data)
         signable = json.dumps(msg.signable_dict(), sort_keys=True, separators=(",", ":"))
         master_key = sigchain.get_current_master_key()
+        logger.info(f"[publish_message] signable: {signable}")
+        logger.info(f"[publish_message] master_key: {master_key}")
+        logger.info(f"[publish_message] signature: {msg.signature}")
         if not master_key:
             return error_response(ErrorCode.INVALID_SIGCHAIN, "No master key for sender", 400)
 
         from nodetide.core.crypto import VerifyKey
         pubkey = VerifyKey.from_hex(master_key)
         if not pubkey.verify_hex(signable.encode(), msg.signature):
+            logger.warning(f"[publish_message] Signature verification failed")
             return error_response(ErrorCode.INVALID_SIGNATURE, "Invalid message signature", 400)
 
         # Save message

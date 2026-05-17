@@ -1115,15 +1115,19 @@
             request_transit_report: false,
           };
 
-          // Sign the message
-          const signable = JSON.stringify(message, Object.keys(message).sort());
+          // Sign the message (use canonicalize for proper key sorting)
+          const signable = canonicalize(message);
+          console.log('[publish] signable:', signable);
+          console.log('[publish] signing with pubkey:', keyPair.signing.publicKey);
           message.signature = Crypto.sign(signable, keyPair.signing.secretKey);
+          console.log('[publish] signature:', message.signature);
 
           await api.publishMessage(message);
           Alpine.store('app').showSuccess('Message published');
           this.messageText = '';
           this.load(); // Refresh list
         } catch (e) {
+          console.error('[publish] error:', e);
           Alpine.store('app').showError('Failed to publish: ' + e.message);
         } finally {
           this.publishing = false;
