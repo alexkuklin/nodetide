@@ -21,8 +21,9 @@ p, anonymous, /api/lookup/:id, GET
 p, anonymous, /api/trust/*, GET
 p, anonymous, /api/trust/*, POST
 
-# Relay status is public (read-only)
+# Relay status and discovery is public (read-only)
 p, anonymous, /api/relay/status, GET
+p, anonymous, /api/relay/discover, GET
 p, anonymous, /api/relay/identities, GET
 
 # Relay configuration - admin or authenticated identity

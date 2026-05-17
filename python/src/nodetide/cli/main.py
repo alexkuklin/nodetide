@@ -877,6 +877,159 @@ GET /lookup/{hash}
     click.echo(docs)
 
 
+# Relay commands
+
+
+@cli.group()
+def relay():
+    """Relay discovery and management commands."""
+    pass
+
+
+@relay.command("discover")
+@click.option("--timeout", "-t", type=int, default=5, help="Discovery timeout in seconds")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+def relay_discover(timeout: int, as_json: bool):
+    """Discover relay nodes on the local network via mDNS.
+
+    Scans for nodetide relay nodes advertising via mDNS (_nodetide._tcp.local.)
+    and displays their addresses.
+
+    Examples:
+      nodetide relay discover
+      nodetide relay discover --timeout 10
+      nodetide relay discover --json
+    """
+    import asyncio
+    from nodetide.relay import RelayDiscovery
+
+    relays_found = []
+
+    def on_found(ip: str, port: int, props: dict):
+        relays_found.append({"ip": ip, "port": port, "properties": props})
+        if not as_json:
+            click.echo(f"  Found: {ip}:{port}")
+
+    async def discover():
+        if not as_json:
+            click.echo(f"Scanning for relays ({timeout}s)...")
+
+        discovery = RelayDiscovery(on_found=on_found)
+        await discovery.start()
+        await asyncio.sleep(timeout)
+        await discovery.stop()
+
+    asyncio.run(discover())
+
+    if as_json:
+        import json
+        click.echo(json.dumps(relays_found, indent=2))
+    else:
+        if not relays_found:
+            click.echo("No relays found on the local network.")
+        else:
+            click.echo(f"\nFound {len(relays_found)} relay(s).")
+
+
+@relay.command("connect")
+@click.argument("url", required=False)
+@click.option("--discover", "use_discover", is_flag=True, help="Discover and select a relay")
+def relay_connect(url: str | None, use_discover: bool):
+    """Set the relay URL for this client.
+
+    The relay URL is used for syncing identities and messages.
+
+    Examples:
+      nodetide relay connect http://192.168.1.100:4557
+      nodetide relay connect --discover
+    """
+    import asyncio
+    from nodetide.relay import RelayDiscovery
+
+    if use_discover:
+        relays_found = []
+
+        def on_found(ip: str, port: int, props: dict):
+            relays_found.append((ip, port, props))
+
+        async def discover():
+            click.echo("Scanning for relays (3s)...")
+            discovery = RelayDiscovery(on_found=on_found)
+            await discovery.start()
+            await asyncio.sleep(3)
+            await discovery.stop()
+
+        asyncio.run(discover())
+
+        if not relays_found:
+            click.echo("No relays found. Specify URL manually.")
+            return
+
+        if len(relays_found) == 1:
+            ip, port, _ = relays_found[0]
+            url = f"http://{ip}:{port}"
+            click.echo(f"Found relay: {url}")
+        else:
+            click.echo("Found relays:")
+            for i, (ip, port, props) in enumerate(relays_found):
+                name = props.get("name", f"{ip}:{port}")
+                click.echo(f"  [{i+1}] {name} - http://{ip}:{port}")
+
+            choice = click.prompt("Select relay", type=int, default=1)
+            if 1 <= choice <= len(relays_found):
+                ip, port, _ = relays_found[choice - 1]
+                url = f"http://{ip}:{port}"
+            else:
+                click.echo("Invalid selection.")
+                return
+
+    if not url:
+        click.echo("Specify a relay URL or use --discover")
+        return
+
+    # Save relay URL to storage
+    storage = get_storage()
+    storage.set_relay_config("relay_url", url)
+    storage.close()
+
+    click.echo(f"Relay URL set to: {url}")
+
+
+@relay.command("status")
+def relay_status():
+    """Show current relay configuration."""
+    storage = get_storage()
+    relay_url = storage.get_relay_config("relay_url")
+    storage.close()
+
+    if relay_url:
+        click.echo(f"Relay URL: {relay_url}")
+
+        # Try to fetch status
+        import asyncio
+        import aiohttp
+
+        async def fetch_status():
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(f"{relay_url}/api/relay/status", timeout=aiohttp.ClientTimeout(total=5)) as resp:
+                        if resp.status == 200:
+                            data = await resp.json()
+                            click.echo(f"Status: connected")
+                            click.echo(f"  Running: {data.get('running')}")
+                            click.echo(f"  Suspended: {data.get('suspended')}")
+                            click.echo(f"  Poll interval: {data.get('poll_interval')}s")
+                            click.echo(f"  Identities: {data.get('identities_count', 0)}")
+                        else:
+                            click.echo(f"Status: error ({resp.status})")
+            except Exception as e:
+                click.echo(f"Status: unreachable ({e})")
+
+        asyncio.run(fetch_status())
+    else:
+        click.echo("No relay configured. Use 'nodetide relay connect' to set one.")
+
+
 # Group commands
 
 

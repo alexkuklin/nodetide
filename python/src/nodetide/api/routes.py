@@ -1044,6 +1044,37 @@ async def relay_set_interval(request: web.Request) -> web.Response:
         return error_response(ErrorCode.INVALID_REQUEST, "Invalid interval", 400)
 
 
+async def relay_discover(request: web.Request) -> web.Response:
+    """GET /relay/discover - Discover relay nodes on local network via mDNS.
+
+    Query params:
+        timeout: Discovery timeout in seconds (default 3, max 10)
+    """
+    import asyncio
+    from nodetide.relay import RelayDiscovery
+
+    timeout = min(int(request.query.get("timeout", 3)), 10)
+    relays_found = []
+
+    def on_found(ip: str, port: int, props: dict):
+        relays_found.append({
+            "ip": ip,
+            "port": port,
+            "url": f"http://{ip}:{port}",
+            "properties": props,
+        })
+
+    discovery = RelayDiscovery(on_found=on_found)
+    await discovery.start()
+    await asyncio.sleep(timeout)
+    await discovery.stop()
+
+    return web.json_response({
+        "relays": relays_found,
+        "timeout": timeout,
+    })
+
+
 def setup_routes(app: web.Application) -> None:
     """Setup all API routes."""
 
@@ -1084,6 +1115,7 @@ def setup_routes(app: web.Application) -> None:
 
     # Relay routes (work in any mode, but poller only in relay mode)
     app.router.add_get("/api/relay/status", relay_status)
+    app.router.add_get("/api/relay/discover", relay_discover)
     app.router.add_post("/api/relay/identities", relay_add_identity)
     app.router.add_get("/api/relay/identities", relay_list_identities)
     app.router.add_delete("/api/relay/identities/{hash}", relay_remove_identity)
