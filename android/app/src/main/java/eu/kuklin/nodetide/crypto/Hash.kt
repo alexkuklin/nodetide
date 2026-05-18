@@ -2,7 +2,6 @@ package eu.kuklin.nodetide.crypto
 
 import com.goterl.lazysodium.LazySodiumAndroid
 import com.goterl.lazysodium.SodiumAndroid
-import com.goterl.lazysodium.interfaces.GenericHash
 
 /**
  * Cryptographic hashing utilities using BLAKE2b (compatible with nodetide).
@@ -19,6 +18,11 @@ object Hash {
         lazySodium.cryptoGenericHash(hash, 32, data, data.size.toLong(), null, 0)
         return hash
     }
+
+    /**
+     * Alias for blake2b256 for convenience.
+     */
+    fun blake2b(data: ByteArray): ByteArray = blake2b256(data)
 
     /**
      * Compute BLAKE2b-256 hash and return as hex string.

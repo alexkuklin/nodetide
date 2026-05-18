@@ -26,4 +26,7 @@
     <!-- Text colors -->
     <color name="text_primary">#EAEAEA</color>
     <color name="text_secondary">#A0A0A0</color>
+
+    <!-- Launcher icon -->
+    <color name="ic_launcher_background">#1A1A2E</color>
 </resources>

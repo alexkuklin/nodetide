@@ -80,7 +80,7 @@ class IdentityStore(private val context: Context) {
             name = name,
             signingSecretKey = signingKeyPair.secretKeyHex,
             signingPublicKey = signingKeyPair.publicKeyHex,
-            encryptionSecretKey = encryptionKeyPair.secretKey.let { eu.kuklin.nodetide.crypto.toHex() },
+            encryptionSecretKey = encryptionKeyPair.secretKey.joinToString("") { "%02x".format(it) },
             encryptionPublicKey = encryptionKeyPair.publicKeyHex,
             distributionPoints = distributionPoints,
             createdAt = timestamp,
