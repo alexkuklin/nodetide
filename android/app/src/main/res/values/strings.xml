@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Nodetide</string>
+
+    <!-- Navigation -->
+    <string name="nav_home">Home</string>
+    <string name="nav_identity">Identity</string>
+    <string name="nav_messages">Messages</string>
+    <string name="nav_relays">Relays</string>
+    <string name="nav_settings">Settings</string>
+
+    <!-- Identity -->
+    <string name="create_identity">Create Identity</string>
+    <string name="attach_device">Attach as Device</string>
+    <string name="identity_name">Name</string>
+    <string name="identity_hash">Identity Hash</string>
+    <string name="no_identity">No identity configured</string>
+    <string name="scan_qr">Scan QR Code</string>
+
+    <!-- Relay -->
+    <string name="discover_relays">Discover Relays</string>
+    <string name="scanning">Scanning...</string>
+    <string name="no_relays_found">No relays found</string>
+    <string name="connect">Connect</string>
+    <string name="connected">Connected</string>
+    <string name="disconnected">Disconnected</string>
+
+    <!-- Messages -->
+    <string name="compose_message">Compose Message</string>
+    <string name="publish">Publish</string>
+    <string name="no_messages">No messages yet</string>
+
+    <!-- Actions -->
+    <string name="save">Save</string>
+    <string name="cancel">Cancel</string>
+    <string name="refresh">Refresh</string>
+    <string name="copy">Copy</string>
+    <string name="share">Share</string>
+    <string name="show_raw">Show Raw</string>
+</resources>
