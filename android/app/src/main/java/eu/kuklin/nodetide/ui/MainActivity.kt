@@ -14,7 +14,6 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
-import eu.kuklin.nodetide.NodetideApp
 import eu.kuklin.nodetide.ui.screens.*
 import eu.kuklin.nodetide.ui.theme.NodetideTheme
 
@@ -23,7 +22,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         setContent {
             NodetideTheme {
-                NodetideApp()
+                NodetideMainContent()
             }
         }
     }
@@ -31,7 +30,7 @@ class MainActivity : ComponentActivity() {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun NodetideApp() {
+fun NodetideMainContent() {
     val navController = rememberNavController()
     val currentBackStack by navController.currentBackStackEntryAsState()
     val currentRoute = currentBackStack?.destination?.route ?: Screen.Home.route
@@ -86,18 +85,20 @@ fun NodetideApp() {
 }
 
 sealed class Screen(val route: String, val label: String, val icon: androidx.compose.ui.graphics.vector.ImageVector) {
-    object Home : Screen("home", "Home", Icons.Default.Home)
-    object Identity : Screen("identity", "Identity", Icons.Default.Person)
-    object Messages : Screen("messages", "Messages", Icons.Default.Email)
-    object Relays : Screen("relays", "Relays", Icons.Default.Wifi)
-    object Settings : Screen("settings", "Settings", Icons.Default.Settings)
+    data object Home : Screen("home", "Home", Icons.Default.Home)
+    data object Identity : Screen("identity", "Identity", Icons.Default.Person)
+    data object Messages : Screen("messages", "Messages", Icons.Default.Email)
+    data object Relays : Screen("relays", "Relays", Icons.Default.Wifi)
+    data object Settings : Screen("settings", "Settings", Icons.Default.Settings)
 
     // Non-bottom-nav screens
-    object CreateIdentity : Screen("create_identity", "Create Identity", Icons.Default.Add)
-    object AttachDevice : Screen("attach_device", "Attach Device", Icons.Default.Link)
-    object ScanQR : Screen("scan_qr", "Scan QR", Icons.Default.QrCodeScanner)
+    data object CreateIdentity : Screen("create_identity", "Create Identity", Icons.Default.Add)
+    data object AttachDevice : Screen("attach_device", "Attach Device", Icons.Default.Link)
+    data object ScanQR : Screen("scan_qr", "Scan QR", Icons.Default.QrCodeScanner)
 
     companion object {
-        val bottomNavItems = listOf(Home, Identity, Messages, Relays, Settings)
+        val bottomNavItems: List<Screen> by lazy {
+            listOf(Home, Identity, Messages, Relays, Settings)
+        }
     }
 }
