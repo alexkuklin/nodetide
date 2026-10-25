@@ -98,10 +98,48 @@ def cert_facts(cert: x509.Certificate) -> CertFacts:
     )
 
 
+@dataclass(frozen=True)
+class CertNames:
+    """Name fields of a signer certificate, as qualified CAs actually issue them.
+
+    Typically givenName and surname are present and the common name is the full
+    name, possibly with a middle name or patronymic ("ALEXEY IVANOVICH SMIRNOV").
+    """
+
+    given: str | None
+    surname: str | None
+    common_name: str | None
+
+    def _surname(self) -> str:
+        if self.surname:
+            return self.surname.strip()
+        parts = (self.common_name or "").split()
+        return parts[-1] if len(parts) > 1 else ""
+
+    def given_candidates(self) -> list[str]:
+        """Acceptable readings of a given name: givenName, and the CN minus the surname."""
+        candidates = [self.given] if self.given else []
+        cn, surname = (self.common_name or "").strip(), self._surname()
+        if cn and surname and _fold(cn).endswith(_fold(surname)):
+            rest = cn[: len(cn) - len(surname)].strip()
+            if rest and rest not in candidates:
+                candidates.append(rest)
+        return candidates
+
+    def family_candidates(self) -> list[str]:
+        surname = self._surname()
+        return [surname] if surname else []
+
+
+def cert_names(cert: x509.Certificate) -> CertNames:
+    subject = cert.subject.native
+    return CertNames(subject.get("given_name"), subject.get("surname"), subject.get("common_name"))
+
+
 def signer_names(cert: x509.Certificate) -> tuple[str | None, str | None]:
     """(given name, surname) from the certificate subject, if present."""
-    subject = cert.subject.native
-    return subject.get("given_name"), subject.get("surname")
+    names = cert_names(cert)
+    return names.given, names.surname
 
 
 # Bulgarian "Streamlined System" (Law on the Transliteration, 2009), used because
@@ -112,6 +150,8 @@ _BG = {
     "т": "t", "у": "u", "ф": "f", "х": "h", "ц": "ts", "ч": "ch", "ш": "sh", "щ": "sht",
     "ъ": "a", "ь": "y", "ю": "yu", "я": "ya",
 }
+
+MATCH_STRENGTH = {"exact": 0, "transliterated": 1, "approximate": 2}
 
 
 def _fold(text: str) -> str:
@@ -127,12 +167,35 @@ def transliterate_bg(text: str) -> str:
     return out
 
 
+def _loose(text: str) -> str:
+    """Spelling-insensitive key: Latin spellings of one name differ in x/ks, j/y, ia/ya, ..."""
+    out = transliterate_bg(text)
+    for old, new in (("x", "ks"), ("j", "y"), ("w", "v"), ("ya", "ia"), ("yu", "iu"), ("ye", "e"),
+                     ("ii", "i"), ("yy", "y"), ("iy", "y"), ("ey", "ei"), ("ay", "ai"), ("oy", "oi")):
+        out = out.replace(old, new)
+    out = "".join(ch for ch in out if ch.isalpha())
+    return "".join(ch for i, ch in enumerate(out) if i == 0 or ch != out[i - 1])  # double letters
+
+
 def names_match(claimed: str, certified: str | None) -> str | None:
-    """How a claimed name part relates to the certificate's: "exact", "transliterated" or None."""
+    """How a claimed name part relates to the certificate's: exact | transliterated | approximate | None."""
     if not certified:
         return None
     if _fold(claimed) == _fold(certified):
         return "exact"
     if transliterate_bg(claimed) == _fold(certified) or _fold(claimed) == transliterate_bg(certified):
         return "transliterated"
+    if _loose(claimed) and _loose(claimed) == _loose(certified):
+        return "approximate"
     return None
+
+
+def match_legal_name(given: str, family: str, names: CertNames) -> str | None:
+    """The weakest match strength needed for both name parts to agree, or None."""
+    firsts = [m for m in (names_match(given, c) for c in names.given_candidates()) if m]
+    lasts = [m for m in (names_match(family, c) for c in names.family_candidates()) if m]
+    if not firsts or not lasts:
+        return None
+    best_first = min(firsts, key=MATCH_STRENGTH.__getitem__)
+    best_last = min(lasts, key=MATCH_STRENGTH.__getitem__)
+    return max(best_first, best_last, key=MATCH_STRENGTH.__getitem__)

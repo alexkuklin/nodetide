@@ -300,8 +300,10 @@ async def verify_claim(request: web.Request) -> web.Response:
 
     Stateless: nothing is stored, so this is safe for attestations that embed a
     signer's certificate. Body: {"attestation": {...}, "document": {...}?,
-    "subject_sigchain": [...]?, "issuer_sigchain": [...]?}
-    Whether the issuer or authority is *acceptable* is the caller's policy.
+    "subject_sigchain": [...]?, "issuer_sigchain": [...]?,
+    "name_match": "exact"|"transliterated"|"approximate"?}
+    Whether the issuer or authority is *acceptable* is the caller's policy;
+    name_match is the weakest legal-name match to accept (default transliterated).
     """
     storage: Storage = request.app["storage"]
     data = await read_object(request)
@@ -359,7 +361,10 @@ async def verify_claim(request: web.Request) -> web.Response:
         if att.proof is not None and att.claim_type == "legal_name":
             from nodetide.eidas.verify import check_legal_name
 
-            name = check_legal_name(att, document)
+            leniency = data.get("name_match", "transliterated")
+            if not isinstance(leniency, str):
+                return error("invalid_request", "name_match must be a string", 400)
+            name = check_legal_name(att, document, leniency)
             if not name.ok:
                 return fail("name_mismatch", name.reason or "The name does not match the certificate")
             result["name_match"] = name.how

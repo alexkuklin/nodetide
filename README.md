@@ -204,6 +204,8 @@ Lets any Nodetide identity sign in to standard OIDC applications (Keycloak-style
 | `NODETIDE_OIDC_KEY_FILE` | RSA signing key; defaults to `oidc_signing_key.pem` beside the database and is created on first start |
 | `NODETIDE_SEED_NODES` | Comma-separated node URLs asked for identities this node doesn't know |
 | `NODETIDE_FETCH_ALLOW_PRIVATE` | `1` to let the fetcher reach private/loopback addresses (LAN or development only) |
+| `NODETIDE_OIDC_TRUSTED_ISSUERS` | Comma-separated identity hashes trusted to attest `email`, `phone` and `legal_name` (besides this node's own verifiers) |
+| `NODETIDE_OIDC_NAME_MATCH` | `exact`, `transliterated` (default) or `approximate`: how loosely a legal name may differ from an eID certificate |
 
 Clients file (omit `client_secret_sha256` for public clients, which must use PKCE; PKCE is accepted for all):
 
@@ -214,6 +216,8 @@ Clients file (omit `client_secret_sha256` for public clients, which must use PKC
 ```
 
 Point the application at `https://<issuer>/.well-known/openid-configuration`. Endpoints: `/oidc/authorize`, `/oidc/token`, `/oidc/userinfo`, `/oidc/jwks.json`. The `sub` claim is the identity hash.
+
+**Verified claims.** Applications get more than an identity hash when they ask for it by scope: `profile` returns the verified legal name (`name`, `given_name`, `family_name`, `name_verified`, plus an OpenID Connect for Identity Assurance `verified_claims` block naming the trust framework, e.g. `eidas`), `email` returns `email` and `email_verified`, `phone` returns `phone_number`. Nothing is released that the scope did not ask for, and only claims backed by an attestation this bridge accepts: its own email verifier, an eIDAS qualified-signature proof (if `NODETIDE_EIDAS_ANCHORS` is set; legal names need `high` assurance), or an issuer in `NODETIDE_OIDC_TRUSTED_ISSUERS`. The user's app chooses what to reveal: the challenge lists what is acceptable (`display.claims_requested`) and the app sends `presentations` (claim document + attestation) with its assertion; the response says what was released or rejected, never the values. Without a verified name, `profile` falls back to the identity's own display name with `name_verified: false`.
 
 Identities the node doesn't know yet are fetched in the background and the user sees a "failed for now, try again later" message; see "Authentication (SSO)" in [identity-system.md](identity-system.md). Run a single instance: attempts, codes and tokens are held in memory.
 

@@ -238,53 +238,99 @@ def eid_attach(claim_id: str, statement_file: str, signature_file: str, out: str
     click.echo("It contains your certificate (with personal identifiers): give it only to parties you want to prove this to.")
 
 
+def _slot_state(info) -> str:
+    if info.pin_locked:
+        return "PIN LOCKED"
+    if info.pin_final_try:
+        return "ONE PIN attempt left"
+    if info.pin_count_low:
+        return "some PIN attempts already failed"
+    return "PIN ok"
+
+
 @eid.command("tokens")
 @click.option("--module", help="PKCS#11 module (default: $NODETIDE_PKCS11_MODULE or a known location)")
-@click.option("--slot", type=int)
-def eid_tokens(module: str | None, slot: int | None):
-    """List the certificates on your eID token."""
-    from nodetide.eidas.pkcs11 import Pkcs11Error, Pkcs11Signer, find_module
+def eid_tokens(module: str | None):
+    """Show the token's slots (each has its own PIN) and its certificates. Needs no PIN."""
+    from nodetide.eidas.pkcs11 import Pkcs11Error, Pkcs11Token, find_module
 
     try:
         path = find_module(module)
-        _, session, certs, _ = Pkcs11Signer.open_session(path, slot)
+        token = Pkcs11Token(path)
+        slots, certs = token.slots(), token.certificates()
     except Pkcs11Error as e:
         raise click.ClickException(str(e)) from None
-    click.echo(f"Module: {path}")
+    click.echo(f"Module: {path}\n")
+    for info in slots:
+        hint = "  <- digital signature PIN" if info.looks_like_signature_slot else ""
+        click.echo(f"slot {info.slot}: {info.label} [{info.model}] PIN {info.min_pin}-{info.max_pin} chars, "
+                   f"{_slot_state(info)}{hint}")
+    click.echo()
     for c in certs:
-        flags = ", ".join(f for f, on in (("signing", c.usable_for_signing), ("qualified", c.facts.qualified),
-                                           ("qscd", c.facts.qscd), ("has key", c.has_private_key)) if on)
-        click.echo(f"  [{c.index}] {c.subject} - {c.label} - valid until {c.facts.not_after:%Y-%m-%d} ({flags or 'no signing use'})")
-    session.closeSession()
+        f = c.facts
+        use = "for signing" if c.usable_for_signing else "not for signing"
+        click.echo(f"cert [{c.index}] {c.subject}, issued by {f.issuer_name}, valid until {f.not_after:%Y-%m-%d}")
+        click.echo(f"       {use}; qualified={f.qualified}, qscd={f.qscd} -> assurance {f.assurance}; seen on slot {c.slot}")
+    click.echo("\nEvery slot has its own PIN, and a wrong PIN uses up one of a few attempts. "
+               "A qualified signature normally needs the digital signature PIN.")
 
 
 @eid.command("sign")
 @click.argument("claim_id")
 @click.option("--module", help="PKCS#11 module path")
-@click.option("--slot", type=int)
+@click.option("--slot", type=int, help="Slot whose PIN you will type (see `eid tokens`)")
 @click.option("--cert", "cert_index", type=int, help="Certificate number from `eid tokens`")
 @click.option("--valid-days", type=int, default=30, show_default=True)
 @click.option("--out", "-o", type=click.Path(dir_okay=False), default=None)
 def eid_sign(claim_id: str, module: str | None, slot: int | None, cert_index: int | None,
              valid_days: int, out: str | None):
-    """Sign the claim statement with the key on your eID token (PIN is asked here, never stored)."""
+    """Sign the claim statement with the key on your eID token.
+
+    The PIN is typed at a hidden prompt, used once and never stored. If the key
+    needs the PIN for each signature you are asked for it a second time.
+    """
     from nodetide.eidas.issue import build_eidas_attestation, statement_for
-    from nodetide.eidas.pkcs11 import Pkcs11Error, Pkcs11Signer, find_module
+    from nodetide.eidas.pkcs11 import Pkcs11Error, Pkcs11Token, find_module
 
     storage = _storage()
     identity = _default(storage)
     record = _record(identity, claim_id)
     signer = None
     try:
-        path = find_module(module)
-        signer = Pkcs11Signer.for_certificate(path, cert_index, slot)
-        text, _, valid_until = statement_for(identity.sigchain, record, signer.entry.facts.not_after, valid_days)
-        click.echo("You are about to sign this statement:\n")
+        token = Pkcs11Token(find_module(module))
+        entry = token.choose_certificate(cert_index)
+        slots = token.slots()
+
+        if slot is None:
+            if len(slots) == 1:
+                slot = slots[0].slot
+            else:
+                click.echo("This token has several slots, each with its own PIN:")
+                for info in slots:
+                    hint = "  <- digital signature PIN (usually the one for qualified signatures)" if info.looks_like_signature_slot else ""
+                    click.echo(f"  slot {info.slot}: {info.label} - {_slot_state(info)}{hint}")
+                guess = next((i.slot for i in slots if i.looks_like_signature_slot), slots[0].slot)
+                slot = click.prompt("Slot to log in to", type=int, default=guess)
+        info = token.slot_info(slot)
+        if info.pin_locked:
+            raise click.ClickException(f"The PIN of slot {slot} is locked. Unblock it with your PUK first.")
+
+        text, _, _ = statement_for(identity.sigchain, record, entry.facts.not_after, valid_days)
+        click.echo("\nYou are about to sign this statement:\n")
         click.echo(text)
-        click.echo(f"\nwith the certificate of: {signer.entry.subject}")
+        click.echo(f"\nwith the certificate of: {entry.subject}")
+        click.echo(f"and the PIN of slot {slot} ({info.label}).")
+        if info.pin_final_try:
+            click.echo("\n!! Only ONE PIN attempt is left on this slot. A wrong PIN will LOCK it.")
+            if not click.confirm("Continue anyway?", default=False):
+                raise click.Abort()
+        elif info.pin_count_low:
+            click.echo("\nNote: some PIN attempts on this slot have already failed.")
         if not click.confirm("Sign?", default=False):
             raise click.Abort()
-        signer.login(click.prompt("Token PIN", hide_input=True))
+
+        signer = token.signer(entry, slot, lambda reason: click.prompt(reason, hide_input=True))
+        signer.login()
         attestation = build_eidas_attestation(identity.sigchain, record, signer, valid_days)
     except Pkcs11Error as e:
         raise click.ClickException(str(e)) from None
@@ -294,7 +340,7 @@ def eid_sign(claim_id: str, module: str | None, slot: int | None, cert_index: in
     target = out or f"attestation-{claim_id[:8]}.json"
     _save_attestation(storage, attestation, target)
     storage.close()
-    click.echo(f"Attestation written to {target}")
+    click.echo(f"\nAttestation written to {target}")
     _describe(attestation)
 
 

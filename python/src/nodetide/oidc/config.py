@@ -6,6 +6,8 @@ Environment:
     NODETIDE_OIDC_KEY_FILE         RSA signing key (PEM); created if missing
     NODETIDE_SEED_NODES            comma-separated node URLs to ask for unknown identities
     NODETIDE_FETCH_ALLOW_PRIVATE   "1" to let the fetcher contact private/loopback addresses
+    NODETIDE_OIDC_TRUSTED_ISSUERS  comma-separated identity hashes trusted to attest email/phone/legal_name
+    NODETIDE_OIDC_NAME_MATCH       exact|transliterated|approximate: how loosely a legal name may match an eID certificate
 
 Clients file:
     [{"client_id": "grafana", "name": "Grafana",
@@ -70,6 +72,9 @@ class OIDCConfig:
     key_file: Path | None = None
     seed_nodes: list[str] = field(default_factory=list)
     allow_private_fetch: bool = False
+    trusted_issuers: list[str] = field(default_factory=list)  # extra attestation issuers to accept
+    name_match: str = "transliterated"
+    claim_rules: dict = field(default_factory=dict)  # explicit ClaimRule overrides by claim type
     attempt_lifetime: int = 900  # how long a sign-in page stays usable
     code_lifetime: int = 120
     id_token_lifetime: int = 600
@@ -82,6 +87,11 @@ class OIDCConfig:
         parts = urlsplit(self.issuer)
         if parts.query or parts.fragment:
             raise ConfigError("issuer must not contain a query or fragment")
+        for issuer in self.trusted_issuers:
+            if len(issuer) != 64 or any(c not in "0123456789abcdef" for c in issuer):
+                raise ConfigError(f"trusted issuer {issuer!r} is not an identity hash")
+        if self.name_match not in ("exact", "transliterated", "approximate"):
+            raise ConfigError("name_match must be exact, transliterated or approximate")
 
     @classmethod
     def load_clients(cls, path: str | Path) -> dict[str, OIDCClient]:
@@ -150,4 +160,8 @@ class OIDCConfig:
             key_file=key_path,
             seed_nodes=seeds,
             allow_private_fetch=os.environ.get("NODETIDE_FETCH_ALLOW_PRIVATE") == "1",
+            trusted_issuers=[
+                h.strip().lower() for h in os.environ.get("NODETIDE_OIDC_TRUSTED_ISSUERS", "").split(",") if h.strip()
+            ],
+            name_match=os.environ.get("NODETIDE_OIDC_NAME_MATCH", "transliterated"),
         )

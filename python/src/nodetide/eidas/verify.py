@@ -12,7 +12,9 @@ from typing import Any
 
 from nodetide.core.claims import PROOF_VERIFIERS, Attestation, Check, ClaimDocument
 from nodetide.core.identity import Sigchain
-from nodetide.eidas.certs import ASSURANCE_ORDER, CertFacts, cert_facts, names_match, signer_names
+from nodetide.eidas.certs import (
+    ASSURANCE_ORDER, MATCH_STRENGTH, CertFacts, cert_facts, cert_names, match_legal_name,
+)
 from nodetide.eidas.cms import CmsError, ParsedCades, verify_cades_detached
 from nodetide.eidas.statement import Statement, StatementError, parse_statement
 from nodetide.eidas.validate import PathError, TrustStore, validate_signer_chain
@@ -135,18 +137,26 @@ class NameCheck:
     reason: str | None = None
 
 
-def check_legal_name(att: Attestation, document: ClaimDocument) -> NameCheck:
-    """Does the disclosed legal name match the names in the signer's certificate?"""
+def check_legal_name(att: Attestation, document: ClaimDocument, leniency: str = "transliterated") -> NameCheck:
+    """Does the disclosed legal name match the names in the signer's certificate?
+
+    `leniency` is the weakest acceptable match: "exact", "transliterated" (Cyrillic
+    vs Latin by the Bulgarian Streamlined System) or "approximate" (spelling
+    variants such as Alexey/Aleksey). The given name may also match the common name
+    minus the surname, so middle names and patronymics are accepted.
+    """
+    if leniency not in MATCH_STRENGTH:
+        return NameCheck(False, reason=f"unknown leniency {leniency!r}")
     if att.claim_type != "legal_name" or document.claim_type != "legal_name":
         return NameCheck(False, reason="Not a legal_name claim")
     try:
         summary = inspect_proof(att)
     except (CmsError, StatementError) as e:
         return NameCheck(False, reason=str(e))
-    given, surname = signer_names(summary.cades.signer_cert)
     value: dict[str, Any] = document.value
-    first = names_match(value["given_name"], given)
-    last = names_match(value["family_name"], surname)
-    if first is None or last is None:
+    how = match_legal_name(value["given_name"], value["family_name"], cert_names(summary.cades.signer_cert))
+    if how is None:
         return NameCheck(False, reason="The name does not match the signer's certificate")
-    return NameCheck(True, "exact" if first == last == "exact" else "transliterated")
+    if MATCH_STRENGTH[how] > MATCH_STRENGTH[leniency]:
+        return NameCheck(False, how, f"The name only matches approximately ({how}); {leniency} is required")
+    return NameCheck(True, how)

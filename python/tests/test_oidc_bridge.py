@@ -180,6 +180,8 @@ async def test_discovery_and_jwks(env):
     assert doc["authorization_endpoint"] == f"{ISSUER}/oidc/authorize"
     assert doc["id_token_signing_alg_values_supported"] == ["RS256"]
     assert doc["code_challenge_methods_supported"] == ["S256"]
+    assert {"openid", "profile", "email", "phone"} <= set(doc["scopes_supported"])
+    assert "verified_claims" in doc["claims_supported"]
     jwks = await (await env.client.get("/oidc/jwks.json")).json()
     assert jwks["keys"][0]["kty"] == "RSA" and jwks["keys"][0]["alg"] == "RS256"
 
@@ -262,13 +264,14 @@ async def test_full_flow_known_identity(env):
     claims = await decode_id_token(env, tokens["id_token"])
     assert claims["sub"] == identity.identity_hash
     assert claims["nonce"] == "oidc-nonce-1"
-    assert claims["name"] == "alice"
+    assert claims["name"] == "alice" and claims["name_verified"] is False
     assert claims["nodetide_device"] == device.verify_key.to_hex()
 
     info = await env.client.get(
         "/oidc/userinfo", headers={"Authorization": f"Bearer {tokens['access_token']}"}
     )
-    assert (await info.json()) == {"sub": identity.identity_hash, "name": "alice"}
+    # the display name from the identity's genesis is self-asserted, and is labelled as such
+    assert (await info.json()) == {"sub": identity.identity_hash, "name": "alice", "name_verified": False}
     bad = await env.client.get("/oidc/userinfo", headers={"Authorization": "Bearer nope"})
     assert bad.status == 401
 

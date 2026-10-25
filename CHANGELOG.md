@@ -3,6 +3,41 @@
 Progress notes kept between sessions. Newest first. Each entry says what changed, why, and what is
 still open, so a new session can pick up without re-deriving context.
 
+## 2026-10-25 (later) - eID token tooling, name mapping, verified claims in OIDC
+
+### Added
+- **OIDC bridge releases verified claims** (`core/relying_party.py`, `oidc/provider.py`): scopes
+  `profile`/`email`/`phone` map to `legal_name`/`email`/`phone` claims; the user's app sends
+  `presentations` with its assertion; the bridge applies `ClaimRule`s (issuers, proof types,
+  assurance, age, no recovery since) and returns standard claims plus an OpenID Connect for Identity
+  Assurance `verified_claims` block. `display.claims_requested` in the challenge tells the app what
+  is acceptable. Self-asserted genesis names are now labelled `name_verified: false`.
+  Config: `NODETIDE_OIDC_TRUSTED_ISSUERS`, `NODETIDE_OIDC_NAME_MATCH`.
+- **eID signing with PIN, rewritten against the real card** (`eidas/pkcs11.py`, `cli/claims.py`):
+  slots and certificates are read without any PIN (`nodetide eid tokens`); the signing slot is chosen
+  explicitly; the PIN is typed at a hidden prompt, tried once, never stored; locked / final-try /
+  count-low states are checked first; keys that demand the PIN for every signature
+  (`CKA_ALWAYS_AUTHENTICATE`) are handled with a context-specific login.
+- **Certificate name mapping** (`eidas/certs.py`): givenName/surname plus the common name minus the
+  surname (middle names, patronymics), and match strengths `exact` < `transliterated` <
+  `approximate` (Alexey/Aleksey, Cyrillic vs Latin). `POST /api/claims/verify` takes `name_match`.
+
+### Findings about the real token (no personal data)
+- B-Trust (BORICA) card, Gemalto IDPrime MD, RSA 3072, SafeNet client libraries in `/usr/local/lib`
+  (`libIDPrimePKCS11.dylib` is the default module). Certificate: qualified, QSCD, key usage
+  content commitment, issued by "B-Trust Operational Qualified CA", subject has givenName, surname,
+  serialNumber (national ID, never copied), CN with patronymic, and an email address.
+- Two slots with separate PINs: slot 0 (authentication; certificate and public key visible, private
+  key hidden before login) and slot 16 "(Digital Signature)". The qualified signing key is expected
+  behind slot 16's PIN. Wrong PINs cost retries: nothing in the tool retries.
+- The certificate carries an email address; verifying an `email` claim from it is possible later but
+  qualified CAs do not necessarily prove mailbox control.
+
+### Not yet done
+- **Real signing has not been run**: needs the user's PIN. Expected: `eid tokens`, create a
+  `legal_name` claim, `eid sign CLAIM_ID --slot 16`, `eid chain`, `eid verify --anchors DIR`
+  with the B-Trust CA certificates from the provider.
+
 ## 2026-10-25 - Claims, attestations, OIDC bridge, explorer, native SSO
 
 ### Added

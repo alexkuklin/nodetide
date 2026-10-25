@@ -444,3 +444,60 @@ def test_trusted_certificates_do_get_their_revocation_checked():
         assert server.hits >= 1
     finally:
         server.close()
+
+
+# --- name fields as a real B-Trust certificate has them ------------------------------------------------------------
+
+
+def btrust_like_world():
+    """givenName=ALEXEY, surname=SMIRNOV, CN carries the patronymic (as on a B-Trust QES)."""
+    return World(given="ALEXEY", surname="SMIRNOV", common_name="ALEXEY IVANOVICH SMIRNOV")
+
+
+def name_doc(w, given, family):
+    doc = ClaimDocument.create(w.holder.identity_hash, "legal_name", {"given_name": given, "family_name": family})
+    w.holder.add_claim(doc.claim_id, "legal_name", doc.commitment)
+    att = build_eidas_attestation(w.holder.sigchain, w.holder.sigchain.get_claim(doc.claim_id), w.signer)
+    return att, doc
+
+
+@pytest.mark.parametrize("given,family,leniency,expected", [
+    ("Alexey", "Smirnov", "exact", "exact"),                             # case differences are not differences
+    ("Alexey Ivanovich", "Smirnov", "exact", "exact"),               # given + patronymic, from the CN
+    ("Алексей", "Смирнов", "approximate", "approximate"),                # Cyrillic with Latin X: only loosely equal
+    ("Aleksey", "Smirnov", "approximate", "approximate"),                # spelling variant
+])
+def test_name_mapping_accepts_real_world_forms(given, family, leniency, expected):
+    w = btrust_like_world()
+    att, doc = name_doc(w, given, family)
+    result = check_legal_name(att, doc, leniency)
+    assert result.ok and result.how == expected, result
+
+
+def test_leniency_controls_how_loose_a_match_may_be():
+    w = btrust_like_world()
+    att, doc = name_doc(w, "Алексей", "Смирнов")
+    assert not check_legal_name(att, doc, "exact").ok
+    assert not check_legal_name(att, doc, "transliterated").ok  # the default: "Aleksey" is not "Alexey" strictly
+    loose = check_legal_name(att, doc, "approximate")
+    assert loose.ok and loose.how == "approximate"
+    assert not check_legal_name(att, doc, "bogus").ok
+
+
+@pytest.mark.parametrize("given,family", [
+    ("Petar", "Smirnov"), ("Alexey", "Petrov"), ("Vladimir", "Smirnov"),  # a patronymic is not a given name
+    ("Alexey", "Ivanovich"),
+])
+def test_name_mapping_rejects_other_people(given, family):
+    w = btrust_like_world()
+    att, doc = name_doc(w, given, family)
+    assert not check_legal_name(att, doc, "approximate").ok
+
+
+def test_certificate_without_name_attributes_falls_back_to_the_common_name():
+    from nodetide.eidas.certs import CertNames, match_legal_name
+
+    names = CertNames(None, None, "MARIA IVANOVA")
+    assert match_legal_name("Maria", "Ivanova", names) == "exact"
+    assert match_legal_name("Maria", "Petrova", names) is None
+    assert match_legal_name("Maria", "Ivanova", CertNames(None, None, "MARIA")) is None

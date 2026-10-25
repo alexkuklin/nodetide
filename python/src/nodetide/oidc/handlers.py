@@ -12,6 +12,7 @@ from urllib.parse import unquote_plus
 from aiohttp import web
 
 from nodetide.core.storage import Storage
+from nodetide.core.relying_party import ClaimRule
 from nodetide.oidc.config import OIDCConfig
 from nodetide.oidc.fetcher import FetchFn
 from nodetide.oidc.pages import csp, render_error_page, render_login_page
@@ -158,6 +159,8 @@ async def login_challenge(request: web.Request) -> web.Response:
             "client_name": attempt.client.name,
             "issuer": provider.config.issuer,
             "login_hint": attempt.login_hint,
+            # claims this application asked for and which attestations are acceptable
+            "claims_requested": provider.claims_requested(attempt),
         },
         "respond_url": f"{base}/assertion",
     })
@@ -166,7 +169,11 @@ async def login_challenge(request: web.Request) -> web.Response:
 async def login_assertion(request: web.Request) -> web.Response:
     """POST /oidc/login/{id}/assertion - the app submits its signed AuthAssertion.
 
-    Body: {"assertion": {...}, "sigchain": [...]?, "hints": ["https://node"]?}
+    Body: {"assertion": {...}, "sigchain": [...]?, "hints": ["https://node"]?,
+           "presentations": [{"document": {...}, "attestation": {...}, "issuer_sigchain": [...]?}]?}
+
+    Presentations are the claims the user chooses to reveal for this sign-in
+    (see display.claims_requested in the challenge); at most five.
     """
     provider = _provider(request)
     attempt = provider.get_attempt(request.match_info["id"])
@@ -185,9 +192,11 @@ async def login_assertion(request: web.Request) -> web.Response:
         return _json({"error": "invalid_request", "message": "hints must be a list"}, 400)
 
     result = await provider.submit_assertion(
-        attempt, data.get("assertion"), data.get("sigchain"), hints[:8]
+        attempt, data.get("assertion"), data.get("sigchain"), hints[:8], data.get("presentations")
     )
     body: dict[str, Any] = {"status": result.outcome, "message": result.message}
+    if result.claims is not None:
+        body["claims"] = result.claims
     if result.outcome == "reapprove":
         body["challenge_url"] = f"{provider.config.issuer}/oidc/login/{attempt.id}/challenge"
     return _json(body, result.http_status)
@@ -251,6 +260,31 @@ async def userinfo(request: web.Request) -> web.Response:
     return _json(info)
 
 
+def default_claim_rules(app: web.Application, config: OIDCConfig) -> dict[str, ClaimRule]:
+    """Rules derived from what this node can verify itself plus the operator's trusted issuers.
+
+    email:      attested by this node's own email verifier, or a trusted issuer
+    phone:      only by trusted issuers
+    legal_name: eIDAS qualified-signature proofs (if the node verifies them) or trusted issuers,
+                always at "high" assurance
+    """
+    trusted = frozenset(config.trusted_issuers)
+    rules: dict[str, ClaimRule] = {}
+    verifier = app.get("email_verifier")
+    email_issuers = trusted | ({verifier.issuer.identity_hash} if verifier is not None else frozenset())
+    if email_issuers:
+        rules["email"] = ClaimRule("email", issuers=frozenset(email_issuers))
+    if trusted:
+        rules["phone"] = ClaimRule("phone", issuers=trusted)
+    has_eidas = app.get("eidas_policy") is not None
+    if trusted or has_eidas:
+        rules["legal_name"] = ClaimRule(
+            "legal_name", issuers=trusted, allow_proof=has_eidas,
+            min_assurance="high", name_leniency=config.name_match,
+        )
+    return rules
+
+
 def setup_oidc(
     app: web.Application,
     config: OIDCConfig,
@@ -259,6 +293,7 @@ def setup_oidc(
 ) -> OIDCProvider:
     """Create the provider, register routes and lifecycle hooks."""
     provider = OIDCProvider(config, storage, fetch=fetch)
+    provider.claim_rules = {**default_claim_rules(app, config), **config.claim_rules}
     app["oidc"] = provider
 
     app.router.add_get("/.well-known/openid-configuration", discovery)

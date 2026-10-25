@@ -106,12 +106,13 @@ def make_signer_cert(
     not_before: dt.datetime | None = None,
     not_after: dt.datetime | None = None,
     crl_url: str | None = None,
+    common_name: str | None = None,
 ) -> Leaf:
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048) if key_kind == "rsa" \
         else ec.generate_private_key(ec.SECP256R1())
     builder = (
         x509.CertificateBuilder()
-        .subject_name(_name(f"{given} {surname}", given=given, surname=surname, serial="PNOBG-0000000000"))
+        .subject_name(_name(common_name or f"{given} {surname}", given=given, surname=surname, serial="PNOBG-0000000000"))
         .issuer_name(ca.cert.subject).public_key(key.public_key())
         .serial_number(x509.random_serial_number())
         .not_valid_before(not_before or now() - DAY).not_valid_after(not_after or now() + 365 * DAY)

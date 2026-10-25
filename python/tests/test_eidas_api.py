@@ -164,3 +164,22 @@ def test_policy_from_environment(tmp_path, monkeypatch):
     monkeypatch.setenv("NODETIDE_EIDAS_REVOCATION", "nonsense")
     with pytest.raises(ValueError):
         policy_from_env()
+
+
+async def test_name_leniency_can_be_chosen_per_request():
+    from tests.test_eidas import btrust_like_world, name_doc
+
+    w = btrust_like_world()
+    att, doc = name_doc(w, "Алексей", "Смирнов")
+    base = {"attestation": att.to_dict(), "subject_sigchain": w.holder.sigchain.to_list(), "document": doc.to_dict()}
+    app = create_app(storage=Storage.memory(), eidas_policy=w.policy)
+    try:
+        async with TestClient(TestServer(app)) as client:
+            status, body = await verify(client, base)
+            assert status == 422 and body["code"] == "name_mismatch"      # default: transliterated
+            status, body = await verify(client, {**base, "name_match": "approximate"})
+            assert status == 200 and body["name_match"] == "approximate"
+            status, _ = await verify(client, {**base, "name_match": 5})
+            assert status == 400
+    finally:
+        PROOF_VERIFIERS.pop("eidas_qes", None)

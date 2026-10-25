@@ -13,12 +13,14 @@ tells the user sign-in has failed *for now*.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import hmac
 import secrets
 import time
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any, Iterable
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
@@ -29,13 +31,19 @@ from nodetide.core.auth import (
     choose_sigchain,
     verify_assertion,
 )
+from nodetide.core.claims import Attestation, ClaimDocument, ClaimError
 from nodetide.core.identity import Sigchain
+from nodetide.core.relying_party import ASSURANCE_RANK, ClaimRule, VerifiedClaim, evaluate_claim
 from nodetide.core.storage import Storage
 from nodetide.oidc.config import OIDCClient, OIDCConfig
 from nodetide.oidc.fetcher import IDENTITY_RE, FetchFn, IdentityFetcher
 from nodetide.oidc.keys import OIDCSigningKey
 
 MAX_ATTEMPTS = 5000
+MAX_PRESENTATIONS = 5
+
+# Which claim types each scope asks for. Nothing else is ever released.
+SCOPE_CLAIMS = {"profile": ("legal_name",), "email": ("email",), "phone": ("phone",)}
 MAX_FAILURES = 5
 REQUEST_LIFETIME = 300  # one AuthRequest; rotated while the attempt lives
 
@@ -96,6 +104,7 @@ class LoginAttempt:
     identity: str | None = None
     failures: int = 0
     redirect_to: str | None = None
+    presentations: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
@@ -108,7 +117,7 @@ class AuthCode:
     scope: str
     identity: str
     device: str
-    name: str | None
+    claims: dict[str, Any]  # OIDC claims released to this client (verified, scope-limited)
     auth_time: int
     expires_at: int
 
@@ -118,7 +127,7 @@ class AccessToken:
     token: str
     identity: str
     scope: str
-    name: str | None
+    claims: dict[str, Any]
     expires_at: int
 
 
@@ -129,6 +138,7 @@ class Submission:
     outcome: str  # approved | fetching | reapprove | <verification error code> | ...
     http_status: int
     message: str
+    claims: dict[str, Any] | None = None  # what was released / rejected (never values)
 
 
 class TokenError(Exception):
@@ -162,6 +172,7 @@ class OIDCProvider:
         self.attempts: dict[str, LoginAttempt] = {}
         self.codes: dict[str, AuthCode] = {}
         self.access_tokens: dict[str, AccessToken] = {}
+        self.claim_rules: dict[str, ClaimRule] = dict(config.claim_rules)
         self.fetcher = IdentityFetcher(
             storage,
             seed_nodes=config.seed_nodes,
@@ -188,12 +199,18 @@ class OIDCProvider:
             "grant_types_supported": ["authorization_code"],
             "subject_types_supported": ["public"],
             "id_token_signing_alg_values_supported": ["RS256"],
-            "scopes_supported": ["openid", "profile"],
+            "scopes_supported": ["openid", "profile", "email", "phone"],
             "token_endpoint_auth_methods_supported": [
                 "client_secret_basic", "client_secret_post", "none",
             ],
             "code_challenge_methods_supported": ["S256"],
-            "claims_supported": ["sub", "iss", "aud", "exp", "iat", "auth_time", "nonce", "name"],
+            "claims_supported": [
+                "sub", "iss", "aud", "exp", "iat", "auth_time", "nonce", "name", "given_name",
+                "family_name", "name_verified", "email", "email_verified", "phone_number",
+                "phone_number_verified", "verified_claims",
+            ],
+            "claims_in_verified_claims_supported": ["given_name", "family_name"],
+            "trust_frameworks_supported": ["eidas", "nodetide"],
         }
 
     # --- attempts ----------------------------------------------------------
@@ -303,6 +320,108 @@ class OIDCProvider:
             )
         return body
 
+    # --- claims ----------------------------------------------------------------
+
+    @staticmethod
+    def requested_claim_types(scope: str) -> list[str]:
+        wanted: list[str] = []
+        for name in scope.split():
+            for claim_type in SCOPE_CLAIMS.get(name, ()):
+                if claim_type not in wanted:
+                    wanted.append(claim_type)
+        return wanted
+
+    def claims_requested(self, attempt: LoginAttempt) -> list[dict[str, Any]]:
+        """What the user's app may present for this sign-in (rules only, no secrets)."""
+        return [
+            self.claim_rules[t].describe()
+            for t in self.requested_claim_types(attempt.scope) if t in self.claim_rules
+        ]
+
+    async def _release_claims(
+        self, attempt: LoginAttempt, chain: Sigchain
+    ) -> tuple[dict[str, VerifiedClaim], dict[str, Any]]:
+        """Evaluate the presented claims against this bridge's rules.
+
+        Only claim types the application asked for (via scope) are considered; an
+        unsuitable presentation never fails the sign-in, it just releases nothing.
+        """
+        wanted = set(self.requested_claim_types(attempt.scope))
+        verified: dict[str, VerifiedClaim] = {}
+        report: dict[str, Any] = {"released": [], "rejected": [], "ignored": 0}
+        loop = asyncio.get_running_loop()
+
+        for item in attempt.presentations:
+            try:
+                document = ClaimDocument.from_dict(item.get("document"))
+                attestation = Attestation.from_dict(item.get("attestation"))
+            except (ClaimError, AttributeError):
+                report["rejected"].append({"claim_type": None, "code": "invalid_presentation"})
+                continue
+            claim_type = attestation.claim_type
+            rule = self.claim_rules.get(claim_type)
+            if claim_type not in wanted or rule is None:
+                report["ignored"] += 1
+                continue
+            if attestation.subject != chain.identity_hash:
+                report["rejected"].append({"claim_type": claim_type, "code": "wrong_identity"})
+                continue
+
+            issuer_chain = None
+            if attestation.issuer is not None:
+                supplied = item.get("issuer_sigchain")
+                provided = None
+                if isinstance(supplied, list):
+                    try:
+                        provided = Sigchain.from_list(supplied)
+                    except Exception:
+                        provided = None
+                issuer_chain, _ = choose_sigchain(self.storage.get_sigchain(attestation.issuer), provided)
+            revoked = self.storage.get_attestation_revocation(attestation.id) is not None
+
+            outcome = await loop.run_in_executor(None, lambda: evaluate_claim(
+                rule, document, attestation, chain, issuer_chain, revoked=revoked, now=self._now()))
+            if outcome.claim is None:
+                report["rejected"].append({"claim_type": claim_type, "code": outcome.code})
+                continue
+            best = verified.get(claim_type)
+            if best is None or ASSURANCE_RANK[outcome.claim.assurance] > ASSURANCE_RANK[best.assurance]:
+                verified[claim_type] = outcome.claim
+
+        report["released"] = [
+            {"claim_type": c.claim_type, "assurance": c.assurance, "method": c.method} for c in verified.values()
+        ]
+        return verified, report
+
+    @staticmethod
+    def oidc_claims(
+        verified: dict[str, VerifiedClaim], scope: str, display_name: str | None
+    ) -> dict[str, Any]:
+        """Map verified claims to standard OIDC claims, limited to what the scope asked for."""
+        scopes = set(scope.split())
+        claims: dict[str, Any] = {}
+        if "profile" in scopes:
+            legal = verified.get("legal_name")
+            if legal is not None:
+                given, family = legal.value["given_name"], legal.value["family_name"]
+                claims.update(given_name=given, family_name=family, name=f"{given} {family}", name_verified=True)
+                claims["verified_claims"] = [{
+                    "verification": {
+                        "trust_framework": "eidas" if legal.method == "eidas_qes" else "nodetide",
+                        "assurance_level": legal.assurance,
+                        "time": datetime.fromtimestamp(legal.issued_at, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    },
+                    "claims": {"given_name": given, "family_name": family},
+                }]
+            elif display_name:
+                # the name in the identity's genesis event: self-asserted, so say so
+                claims.update(name=display_name, name_verified=False)
+        if "email" in scopes and "email" in verified:
+            claims.update(email=verified["email"].value, email_verified=True)
+        if "phone" in scopes and "phone" in verified:
+            claims.update(phone_number=verified["phone"].value, phone_number_verified=True)
+        return claims
+
     # --- assertions --------------------------------------------------------
 
     async def submit_assertion(
@@ -311,6 +430,7 @@ class OIDCProvider:
         assertion: Any,
         supplied_chain: Any = None,
         hints: Iterable[str] = (),
+        presentations: Any = None,
     ) -> Submission:
         self._refresh(attempt)
         if attempt.status == "approved":
@@ -341,10 +461,16 @@ class OIDCProvider:
         if conflict:
             return Submission("conflict", 409, "Supplied sigchain conflicts with the stored one.")
 
+        if presentations is not None:
+            if not isinstance(presentations, list) or len(presentations) > MAX_PRESENTATIONS \
+                    or not all(isinstance(p, dict) for p in presentations):
+                return Submission("invalid_request", 400, f"presentations must be a list of at most {MAX_PRESENTATIONS} objects")
+            attempt.presentations = presentations
+
         hint_list = list(attempt.hint_urls) + [h for h in hints if isinstance(h, str)]
         if chain is None:
             return self._start_fetch(attempt, assertion, hint_list, MSG_FETCHING)
-        return self._evaluate(attempt, assertion, chain, hint_list)
+        return await self._evaluate(attempt, assertion, chain, hint_list)
 
     def _start_fetch(
         self,
@@ -366,7 +492,7 @@ class OIDCProvider:
         attempt.message = message
         return Submission("fetching", 202, message)
 
-    def _evaluate(
+    async def _evaluate(
         self,
         attempt: LoginAttempt,
         assertion: dict[str, Any],
@@ -380,7 +506,7 @@ class OIDCProvider:
             result = AuthResult.fail("invalid_assertion", "Assertion outlives its challenge")
 
         if result.ok:
-            return self._approve(attempt, result, chain)
+            return await self._approve(attempt, result, chain)
 
         if result.code == "unknown_chain_head":
             return self._start_fetch(attempt, assertion, hints, MSG_STALE)
@@ -403,10 +529,12 @@ class OIDCProvider:
             attempt.status = "waiting"
         return Submission(result.code or "invalid_assertion", 401, attempt.message)
 
-    def _approve(self, attempt: LoginAttempt, result: AuthResult, chain: Sigchain) -> Submission:
+    async def _approve(self, attempt: LoginAttempt, result: AuthResult, chain: Sigchain) -> Submission:
         now = self._now()
         genesis = chain.genesis
-        name = genesis.name if genesis is not None else None
+        verified, report = await self._release_claims(attempt, chain)
+        claims = self.oidc_claims(verified, attempt.scope, genesis.name if genesis is not None else None)
+        attempt.presentations = []
         code = secrets.token_urlsafe(32)
         self.codes[code] = AuthCode(
             code=code,
@@ -417,7 +545,7 @@ class OIDCProvider:
             scope=attempt.scope,
             identity=result.identity or "",
             device=result.device or "",
-            name=name,
+            claims=claims,
             auth_time=now,
             expires_at=now + self.config.code_lifetime,
         )
@@ -426,7 +554,7 @@ class OIDCProvider:
         attempt.assertion = None
         attempt.message = MSG_APPROVED
         attempt.redirect_to = add_query(attempt.redirect_uri, {"code": code, "state": attempt.state})
-        return Submission("approved", 200, MSG_APPROVED)
+        return Submission("approved", 200, MSG_APPROVED, claims=report)
 
     async def on_identity_update(self, identity_hash: str) -> None:
         """Called by the fetcher when a chain was stored: finish waiting attempts."""
@@ -440,7 +568,7 @@ class OIDCProvider:
                 and attempt.assertion is not None
                 and attempt.assertion.get("identity") == identity_hash
             ):
-                self._evaluate(attempt, attempt.assertion, chain, [], after_fetch=True)
+                await self._evaluate(attempt, attempt.assertion, chain, [], after_fetch=True)
 
     # --- token endpoint ----------------------------------------------------
 
@@ -481,16 +609,15 @@ class OIDCProvider:
         }
         if auth_code.oidc_nonce:
             claims["nonce"] = auth_code.oidc_nonce
-        scopes = auth_code.scope.split()
-        if "profile" in scopes and auth_code.name:
-            claims["name"] = auth_code.name  # self-asserted in the identity's genesis
+        # Released claims first, so they can never override the registered ones above.
+        claims = {**auth_code.claims, **claims}
 
         access_token = "at_" + secrets.token_urlsafe(32)
         self.access_tokens[access_token] = AccessToken(
             token=access_token,
             identity=auth_code.identity,
             scope=auth_code.scope,
-            name=auth_code.name if "profile" in scopes else None,
+            claims=auth_code.claims,
             expires_at=now + self.config.access_token_lifetime,
         )
         return {
@@ -504,10 +631,7 @@ class OIDCProvider:
         access = self.access_tokens.get(token) if token else None
         if access is None or self._now() > access.expires_at:
             return None
-        info: dict[str, Any] = {"sub": access.identity}
-        if access.name:
-            info["name"] = access.name
-        return info
+        return {**access.claims, "sub": access.identity}
 
     # --- housekeeping ------------------------------------------------------
 
