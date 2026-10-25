@@ -145,6 +145,7 @@ jobs:
         run: |
           if scp "$DEPLOY_USER@$SERVER:nodetide-test/deploy/test/.env" .env 2>/dev/null; then
             echo "reusing the .env already on the server"
+            ./init.sh --upgrade
           elif [ -n "$TEST_DOMAIN" ]; then
             ./init.sh --domain "$TEST_DOMAIN" --edge
           else

@@ -3,6 +3,17 @@
 Progress notes kept between sessions. Newest first. Each entry says what changed, why, and what is
 still open, so a new session can pick up without re-deriving context.
 
+## 2026-10-25 (deployment) - Grafana as a guinea pig + local wallet
+
+### Added
+- **Grafana** (`nt-grafana.<domain>`, port 4574) in the test stack: stock Grafana with its generic OAuth provider
+  (PKCE, client secret, userinfo), registered as client `grafana`. Login = identity hash, email = verified email or
+  `<hash>@nodetide.invalid`, role Viewer; the local admin account stays. Verified end to end locally with the wallet.
+- `init.sh --upgrade` adds the new settings (hosts, client secret, admin password) to an existing `.env` without
+  touching existing secrets and rewrites `config/clients.json`; the workflow runs it before every deploy.
+- Open design point discussed: sign-in works without the user's own node because the wallet submits its sigchain with the
+  assertion; a bridge must be up though (an application trusts one issuer). Not yet tested with separate bridge/home nodes.
+
 ## 2026-10-25 (infrastructure) - Terraform for Hetzner + manual workflow
 
 ### Added

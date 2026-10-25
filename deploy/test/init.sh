@@ -2,41 +2,83 @@
 # Writes .env (with fresh random secrets) and config/clients.json. Safe to re-run: it refuses to
 # overwrite an existing .env unless you pass --force.
 #
-#   ./init.sh --domain example.org [--edge]   public test server: https://nt-{node,rp,wallet}.example.org
+#   ./init.sh --domain example.org [--edge]   public test server: https://nt-{node,rp,wallet,grafana}.example.org
 #                                             (--edge adds the bundled Caddy, for a server whose ports 80/443 are free)
 #   ./init.sh --local                         this machine: http://nt-*.localtest.me:8080 (needs the edge profile)
+#   ./init.sh --upgrade                       existing .env: add settings introduced later (keeps every secret)
 set -eu
 cd "$(dirname "$0")"
 
-MODE=""; DOMAIN=""; FORCE=0; EDGE=0
+MODE=""; DOMAIN=""; FORCE=0; EDGE=0; UPGRADE=0
 while [ $# -gt 0 ]; do
     case "$1" in
         --domain) MODE=domain; DOMAIN="$2"; shift 2 ;;
         --local) MODE=local; shift ;;
         --edge) EDGE=1; shift ;;
         --force) FORCE=1; shift ;;
+        --upgrade) UPGRADE=1; shift ;;
         *) echo "unknown option $1" >&2; exit 2 ;;
     esac
 done
-[ -n "$MODE" ] || { echo "usage: $0 --domain example.org [--edge] | --local [--force]" >&2; exit 2; }
-[ ! -e .env ] || [ "$FORCE" = 1 ] || { echo ".env exists; use --force to replace it" >&2; exit 1; }
+[ "$UPGRADE" = 1 ] || [ -n "$MODE" ] || { echo "usage: $0 --domain example.org [--edge] | --local | --upgrade [--force]" >&2; exit 2; }
+[ "$UPGRADE" = 1 ] || [ ! -e .env ] || [ "$FORCE" = 1 ] || { echo ".env exists; use --force to replace it (or --upgrade to keep it)" >&2; exit 1; }
 
 secret() { python3 -c "import secrets,sys; print(secrets.token_urlsafe(int(sys.argv[1])))" "$1"; }
 cookie_secret() { python3 -c "import secrets,base64; print(base64.urlsafe_b64encode(secrets.token_bytes(32)).decode())"; }
 
+write_clients() {
+    mkdir -p config
+    RP_SHA=$(python3 -c "import hashlib,sys; print(hashlib.sha256(sys.argv[1].encode()).hexdigest())" "$1")
+    GF_SHA=$(python3 -c "import hashlib,sys; print(hashlib.sha256(sys.argv[1].encode()).hexdigest())" "$2")
+    cat > config/clients.json <<JSON
+[{"client_id": "test-rp", "name": "Test relying party (oauth2-proxy)",
+  "redirect_uris": ["$3/oauth2/callback"],
+  "client_secret_sha256": "$RP_SHA"},
+ {"client_id": "grafana", "name": "Grafana",
+  "redirect_uris": ["$4/login/generic_oauth"],
+  "client_secret_sha256": "$GF_SHA"}]
+JSON
+}
+
+if [ "$UPGRADE" = 1 ]; then
+    [ -f .env ] || { echo "no .env to upgrade" >&2; exit 1; }
+    . ./.env
+    if grep -q '^GRAFANA_HOST=' .env; then echo ".env is up to date"; exit 0; fi
+    BASE=${NODE_HOST#nt-node.}
+    G_HOST=nt-grafana.$BASE
+    G_URL=$(printf '%s' "$NODE_URL" | sed "s|$NODE_HOST|$G_HOST|")
+    G_SITE=$(printf '%s' "$NODE_SITE" | sed "s|$NODE_HOST|$G_HOST|")
+    G_SECRET=$(secret 32); G_ADMIN=$(secret 18)
+    umask 077
+    cat >> .env <<ENV
+
+GRAFANA_HOST=$G_HOST
+GRAFANA_URL=$G_URL
+GRAFANA_SITE=$G_SITE
+GRAFANA_CLIENT_SECRET=$G_SECRET
+GRAFANA_ADMIN_PASSWORD=$G_ADMIN
+ENV
+    write_clients "$OIDC_CLIENT_SECRET" "$G_SECRET" "$RP_URL" "$G_URL"
+    echo "upgraded .env and config/clients.json (existing secrets kept)"
+    echo "  grafana: $G_URL   (needs a DNS name; admin password in .env as GRAFANA_ADMIN_PASSWORD)"
+    exit 0
+fi
+
 CLIENT_SECRET=$(secret 32)
 COOKIE_SECRET=$(cookie_secret)
 WALLET_PASSWORD=$(secret 18)
+GRAFANA_SECRET=$(secret 32)
+GRAFANA_ADMIN=$(secret 18)
 
 if [ "$MODE" = local ]; then
-    NODE_HOST=nt-node.localtest.me; RP_HOST=nt-rp.localtest.me; WALLET_HOST=nt-wallet.localtest.me
+    NODE_HOST=nt-node.localtest.me; RP_HOST=nt-rp.localtest.me; WALLET_HOST=nt-wallet.localtest.me; GRAFANA_HOST=nt-grafana.localtest.me
     PORT=":8080"; SCHEME=http; ALLOW_INSECURE=1; COOKIE_SECURE=false; SKIP_TLS=false
-    NODE_SITE="http://$NODE_HOST:8080"; RP_SITE="http://$RP_HOST:8080"; WALLET_SITE="http://$WALLET_HOST:8080"
+    NODE_SITE="http://$NODE_HOST:8080"; RP_SITE="http://$RP_HOST:8080"; WALLET_SITE="http://$WALLET_HOST:8080"; GRAFANA_SITE="http://$GRAFANA_HOST:8080"
     EDGE_HTTP=8080; EDGE_HTTPS=8443; PROFILES=edge
 else
-    NODE_HOST=nt-node.$DOMAIN; RP_HOST=nt-rp.$DOMAIN; WALLET_HOST=nt-wallet.$DOMAIN
+    NODE_HOST=nt-node.$DOMAIN; RP_HOST=nt-rp.$DOMAIN; WALLET_HOST=nt-wallet.$DOMAIN; GRAFANA_HOST=nt-grafana.$DOMAIN
     PORT=""; SCHEME=https; ALLOW_INSECURE=0; COOKIE_SECURE=true; SKIP_TLS=false
-    NODE_SITE=$NODE_HOST; RP_SITE=$RP_HOST; WALLET_SITE=$WALLET_HOST
+    NODE_SITE=$NODE_HOST; RP_SITE=$RP_HOST; WALLET_SITE=$WALLET_HOST; GRAFANA_SITE=$GRAFANA_HOST
     EDGE_HTTP=80; EDGE_HTTPS=443; PROFILES=""
     [ "$EDGE" = 1 ] && PROFILES=edge
 fi
@@ -50,11 +92,15 @@ WALLET_HOST=$WALLET_HOST
 NODE_URL=$SCHEME://$NODE_HOST$PORT
 RP_URL=$SCHEME://$RP_HOST$PORT
 WALLET_URL=$SCHEME://$WALLET_HOST$PORT
+GRAFANA_HOST=$GRAFANA_HOST
+GRAFANA_URL=$SCHEME://$GRAFANA_HOST$PORT
 
 OIDC_CLIENT_ID=test-rp
 OIDC_CLIENT_SECRET=$CLIENT_SECRET
 COOKIE_SECRET=$COOKIE_SECRET
 WALLET_PASSWORD=$WALLET_PASSWORD
+GRAFANA_CLIENT_SECRET=$GRAFANA_SECRET
+GRAFANA_ADMIN_PASSWORD=$GRAFANA_ADMIN
 
 ALLOW_INSECURE=$ALLOW_INSECURE
 COOKIE_SECURE=$COOKIE_SECURE
@@ -64,20 +110,16 @@ EIDAS_REVOCATION=hard-fail
 NODE_SITE=$NODE_SITE
 RP_SITE=$RP_SITE
 WALLET_SITE=$WALLET_SITE
+GRAFANA_SITE=$GRAFANA_SITE
 EDGE_HTTP_PORT=$EDGE_HTTP
 EDGE_HTTPS_PORT=$EDGE_HTTPS
 COMPOSE_PROFILES=$PROFILES
 ENV
 
-mkdir -p config
-SECRET_SHA=$(python3 -c "import hashlib,sys; print(hashlib.sha256(sys.argv[1].encode()).hexdigest())" "$CLIENT_SECRET")
-cat > config/clients.json <<JSON
-[{"client_id": "test-rp", "name": "Test relying party (oauth2-proxy)",
-  "redirect_uris": ["$SCHEME://$RP_HOST$PORT/oauth2/callback"],
-  "client_secret_sha256": "$SECRET_SHA"}]
-JSON
+write_clients "$CLIENT_SECRET" "$GRAFANA_SECRET" "$SCHEME://$RP_HOST$PORT" "$SCHEME://$GRAFANA_HOST$PORT"
 
 echo "wrote .env and config/clients.json"
 echo "  node:   $SCHEME://$NODE_HOST$PORT    (explorer at /explorer/)"
 echo "  rp:     $SCHEME://$RP_HOST$PORT      (sign in with Nodetide, see the claims it receives)"
 echo "  wallet: $SCHEME://$WALLET_HOST$PORT  (user 'wallet', password in .env as WALLET_PASSWORD)"
+echo "  grafana: $SCHEME://$GRAFANA_HOST$PORT  (an ordinary application with native OIDC; local admin password in .env)"

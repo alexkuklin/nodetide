@@ -20,8 +20,9 @@ browser ──► rp (oauth2-proxy) ──► "Signed in" page (shows the claims
 | `node` | the Python node from this repo | `nt-node.<domain>` | 4570 |
 | `rp` | oauth2-proxy + a page that prints the received claims | `nt-rp.<domain>` | 4571 |
 | `wallet` | test wallet (HTTP basic auth, user `wallet`) | `nt-wallet.<domain>` | 4572 |
+| `grafana` | Grafana with native OIDC: an ordinary third-party app as the guinea pig | `nt-grafana.<domain>` | 4574 |
 | `mailpit` | test mailbox UI (private: SSH tunnel) | - | 4573 |
-| `edge` | optional Caddy with automatic HTTPS | all three | 80 / 443 |
+| `edge` | optional Caddy with automatic HTTPS | all four | 80 / 443 |
 
 Everything binds to `127.0.0.1`. The browser and the containers use the very same public URLs
 (the containers reach them through `host-gateway`), so what works here is what a real client sees.
@@ -112,3 +113,12 @@ instead of on the server:
 `--tunnel` forwards the server's test mailbox (port 4573) so email verification still works. State is in
 `.local-wallet/` (git-ignored); the password is generated once and printed. Use the local wallet's identity for
 sign-ins instead of the one on the server (the server's wallet service can simply stay unused).
+
+## Grafana as a guinea pig
+
+`nt-grafana.<domain>` is stock Grafana configured with its generic OAuth provider, the way any real application
+would be: discovery URLs, PKCE, a client secret. Press **Sign in with Nodetide**, approve in the wallet and you land
+in Grafana as a Viewer whose login is your identity hash (the email is the verified one if you shared it, otherwise a
+placeholder `@nodetide.invalid`). The local `admin` account (password `GRAFANA_ADMIN_PASSWORD` in `.env`) stays
+available so you cannot lock yourself out. On an existing server run `./init.sh --upgrade` once; it adds the
+Grafana settings and keeps every existing secret. The workflow does that automatically.

@@ -10,3 +10,7 @@
 {$WALLET_SITE} {
 	reverse_proxy wallet:4572
 }
+
+{$GRAFANA_SITE} {
+	reverse_proxy grafana:3000
+}
