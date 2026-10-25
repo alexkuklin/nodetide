@@ -8,7 +8,6 @@ import time
 import pytest
 from aiohttp.test_utils import TestClient, TestServer
 
-from nodetide.api import create_app
 from nodetide.core.auth import create_assertion
 from nodetide.core.claims import Attestation, ClaimDocument, verify_attestation
 from nodetide.core.identity import DeviceCapability, Identity, Sigchain
@@ -16,6 +15,7 @@ from nodetide.core.storage import Storage
 from nodetide.verifiers import EmailVerifier, NodeIssuer
 from nodetide.verifiers import email_verifier as ev
 from nodetide.verifiers.mail import MemorySender
+from nodetide.verifiers.service import create_verifier_app
 
 D = DeviceCapability
 AUD = "https://node.test"
@@ -80,7 +80,7 @@ async def world():
     clock = Clock()
     sender = MemorySender()
     verifier = EmailVerifier(storage, NodeIssuer.load_or_create(storage, "Test Verifier"), sender, clock=clock)
-    app = create_app(storage=storage, auth_audience=AUD, email_verifier=verifier)
+    app = create_verifier_app(storage, verifier, AUD)
     async with TestClient(TestServer(app)) as client:
         yield World(client, storage, sender, verifier, clock)
 
@@ -95,15 +95,12 @@ async def test_full_flow_issues_a_verifiable_attestation(world):
     assert att.method == "email_code" and att.assurance == "low" and att.subject == world.holder.identity_hash
     assert att.evidence == {}  # the address is not repeated in the attestation
 
-    issuer_chain = world.storage.get_sigchain(att.issuer)
+    issuer_chain = world.verifier.issuer.identity.sigchain
+    assert att.issuer == issuer_chain.identity_hash
     assert verify_attestation(att, world.holder.sigchain, issuer_chain).ok
 
-    # it is stored and shows up on the claim, without the address
-    resp = await world.client.get(f"/api/identities/{world.holder.identity_hash}/claims")
-    text = await resp.text()
-    claim = (await resp.json())["claims"][0]
-    assert claim["attestations"][0]["attestation_id"] == att.id
-    assert ADDRESS not in text
+    # the address is not repeated anywhere in the response
+    assert ADDRESS not in str(body)
 
 
 async def test_the_mail_contains_a_code_and_nothing_sensitive(world):
@@ -340,12 +337,35 @@ def test_issuer_signs_with_a_device_not_the_master():
     assert D.SIGN_IDENTITY.value in active[issuer.device_key.verify_key.to_hex()].capabilities
 
 
-async def test_verification_is_off_unless_configured():
+async def test_a_node_does_not_verify_claims_itself():
+    from nodetide.api import create_app
+
     app = create_app(storage=Storage.memory(), auth_audience=AUD)
     async with TestClient(TestServer(app)) as client:
-        assert (await client.get("/api/verify/issuer")).status == 404
-        assert (await client.post("/api/verify/email/start", json={})).status == 501
-        assert (await client.post("/api/verify/email/confirm", json={})).status == 501
+        for path in ("/api/verify/issuer", "/api/verify/email/start", "/api/verify/email/confirm"):
+            assert (await client.get(path)).status in (404, 405)
+
+
+async def test_issuer_info_carries_the_issuer_chain(world):
+    info = await (await world.client.get("/api/verify/issuer")).json()
+    chain = Sigchain.from_list(info["sigchain"])
+    assert chain.identity_hash == info["issuer"] and chain.verify()[0]
+
+
+async def test_service_exposes_challenge_health_and_index(world):
+    assert (await world.client.get("/health")).status == 200
+    index = await (await world.client.get("/")).json()
+    assert index["issuer"] == world.verifier.issuer.identity_hash
+    assert (await world.client.post("/api/auth/challenge", json={})).status == 201
+
+
+def test_the_issuer_hash_can_be_published_for_pinning(tmp_path, world):
+    from nodetide.verifiers.service import publish_issuer
+
+    target = tmp_path / "share" / "email-issuer"
+    publish_issuer(world.verifier, str(target))
+    assert target.read_text().strip() == world.verifier.issuer.identity_hash
+    publish_issuer(world.verifier, None)  # no target: nothing happens
 
 
 def test_environment_configuration(monkeypatch):
@@ -354,6 +374,8 @@ def test_environment_configuration(monkeypatch):
     storage = Storage.memory()
     monkeypatch.delenv("NODETIDE_EMAIL_VERIFIER", raising=False)
     assert build_email_verifier(storage, AUD) is None
+    with pytest.raises(VerifierConfigError):
+        build_email_verifier(storage, None, required=True)
 
     monkeypatch.setenv("NODETIDE_EMAIL_VERIFIER", "1")
     with pytest.raises(VerifierConfigError):

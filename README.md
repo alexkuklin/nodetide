@@ -162,7 +162,7 @@ nodetide claim revoke CLAIM_ID
 | POST | `/api/attestations/revocations` | Issuer withdraws an attestation |
 | POST | `/api/claims/verify` | Stateless check of any attestation, optionally against a disclosed value |
 
-**Email verification** (assurance `low`): enable with `NODETIDE_EMAIL_VERIFIER=1`, `NODETIDE_AUTH_AUDIENCE`, `NODETIDE_SMTP_HOST` (+ `_PORT`, `_USER`, `_PASSWORD`, `_SECURITY=starttls|ssl|none`), `NODETIDE_EMAIL_FROM` and optionally `NODETIDE_ISSUER_NAME`. For development `NODETIDE_EMAIL_DEV_LOG=1` logs codes instead of sending mail. The node creates its own issuer identity (`GET /api/verify/issuer`). Flow: `POST /api/auth/challenge`, sign an assertion whose claims are `{"purpose": "claim_verification", "claim_id": ...}`, `POST /api/verify/email/start` with the claim document, then `POST /api/verify/email/confirm` with the emailed code.
+**Email verification** (assurance `low`) is a separate, independent service, never part of a node: `python -m nodetide.verifiers.service --port 4558` with `NODETIDE_VERIFIER_URL` (its public origin), `NODETIDE_VERIFIER_HOME` (state: its own database and issuer keys), `NODETIDE_SMTP_HOST` (+ `_PORT`, `_USER`, `_PASSWORD`, `_SECURITY=starttls|ssl|none`), `NODETIDE_EMAIL_FROM`, optionally `NODETIDE_ISSUER_NAME`; `NODETIDE_EMAIL_DEV_LOG=1` logs codes instead of sending mail (development). It creates its own issuer identity (`GET /api/verify/issuer`, which includes the issuer's sigchain) and `NODETIDE_VERIFIER_PUBLISH_ISSUER=FILE` writes the identity hash for the operator to pin. Flow: `POST /api/auth/challenge`, sign an assertion whose claims are `{"purpose": "claim_verification", "claim_id": ...}`, `POST /api/verify/email/start` with the claim document and the holder's sigchain, then `POST /api/verify/email/confirm` with the code the person types from the email. Nobody trusts the service by default: a bridge accepts its attestations only when its identity hash is in `NODETIDE_OIDC_EMAIL_ISSUERS`.
 
 **eID / qualified e-signature** (assurance up to `high`): the holder signs a statement with an electronic signature made with a qualified certificate; relying parties check it against CA certificates they trust (`NODETIDE_EIDAS_ANCHORS=<directory of PEM/DER CA certificates>`, `NODETIDE_EIDAS_REVOCATION=hard-fail|soft-fail|off`).
 
@@ -204,7 +204,8 @@ Lets any Nodetide identity sign in to standard OIDC applications (Keycloak-style
 | `NODETIDE_OIDC_KEY_FILE` | RSA signing key; defaults to `oidc_signing_key.pem` beside the database and is created on first start |
 | `NODETIDE_SEED_NODES` | Comma-separated node URLs asked for identities this node doesn't know |
 | `NODETIDE_FETCH_ALLOW_PRIVATE` | `1` to let the fetcher reach private/loopback addresses (LAN or development only) |
-| `NODETIDE_OIDC_TRUSTED_ISSUERS` | Comma-separated identity hashes trusted to attest `email`, `phone` and `legal_name` (besides this node's own verifiers) |
+| `NODETIDE_OIDC_TRUSTED_ISSUERS` | Comma-separated identity hashes trusted to attest `email`, `phone` and `legal_name`. Nothing is trusted unless named, including anything running beside the node |
+| `NODETIDE_OIDC_EMAIL_ISSUERS` | Comma-separated identity hashes trusted to attest `email` only, e.g. an independent verification service |
 | `NODETIDE_OIDC_NAME_MATCH` | `exact`, `transliterated` (default) or `approximate`: how loosely a legal name may differ from an eID certificate |
 
 Clients file (omit `client_secret_sha256` for public clients, which must use PKCE; PKCE is accepted for all):

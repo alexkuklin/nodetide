@@ -14,8 +14,6 @@ from nodetide.oidc import OIDCConfig, setup_oidc
 from nodetide.oidc.fetcher import FetchFn
 from nodetide.explorer import explorer_enabled, setup_explorer_api, setup_explorer_ui
 from nodetide.eidas.verify import EidasPolicy, policy_from_env as eidas_policy_from_env, register as register_eidas
-from nodetide.verifiers import EmailVerifier
-from nodetide.verifiers.config import build_email_verifier
 from nodetide.api.routes import setup_routes
 from nodetide.api.auth import (
     ChallengeStore,
@@ -50,8 +48,6 @@ async def cleanup_task(app: web.Application) -> None:
         sessions_cleaned = session_store.cleanup_expired()
         recoveries_cleaned = recovery_store.cleanup_expired()
         challenges_cleaned = challenge_store.cleanup_expired()
-        if app.get("email_verifier") is not None:
-            app["email_verifier"].cleanup()
 
         if sessions_cleaned or recoveries_cleaned or challenges_cleaned:
             logger.debug(
@@ -109,7 +105,6 @@ def create_app(
     auth_audience: str | None = None,
     oidc_config: OIDCConfig | None = None,
     oidc_fetch: FetchFn | None = None,
-    email_verifier: EmailVerifier | None = None,
     eidas_policy: EidasPolicy | None = None,
 ) -> web.Application:
     """Create the API application.
@@ -125,7 +120,6 @@ def create_app(
         auth_audience: Origin this node accepts logins for (or NODETIDE_AUTH_AUDIENCE)
         oidc_config: Enable the OIDC bridge (default: from NODETIDE_OIDC_* environment)
         oidc_fetch: Override how the bridge fetches unknown identities (tests)
-        email_verifier: Enable email claim verification (default: from NODETIDE_EMAIL_* environment)
         eidas_policy: Accept eIDAS qualified-signature proofs (default: NODETIDE_EIDAS_ANCHORS)
 
     Returns:
@@ -186,13 +180,6 @@ def create_app(
         register_eidas(eidas_policy)
         app["eidas_policy"] = eidas_policy
         logger.info(f"eIDAS proof verification enabled ({len(eidas_policy.store.anchors)} trust anchors)")
-
-    # Claim verification (email). Needs the node's audience for key-control proofs.
-    if email_verifier is None:
-        email_verifier = build_email_verifier(app["storage"], app["auth_audience"])
-    if email_verifier is not None:
-        app["email_verifier"] = email_verifier
-        logger.info(f"Email verification enabled (issuer={email_verifier.issuer.identity_hash[:16]}...)")
 
     # Explorer: read-only browsing of public information. The API is served in
     # every mode (including relay); the UI whenever a web root is configured.

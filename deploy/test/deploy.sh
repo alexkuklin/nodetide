@@ -55,6 +55,7 @@ echo
 echo "node:    $NODE_URL   (explorer: $NODE_URL/explorer/)"
 echo "rp:      $RP_URL"
 echo "grafana: $GRAFANA_URL   (\"Sign in with Nodetide\"; local admin password is GRAFANA_ADMIN_PASSWORD in .env)"
+echo "verifier: $VERIFIER_URL   (independent email verification service; codes are mailed, see README for the mailbox)"
 echo "wallet:  $WALLET_URL   (user 'wallet'; password is WALLET_PASSWORD in .env)"
-echo "mailbox: ssh -L 4573:127.0.0.1:4573 $TARGET   then open http://localhost:4573"
+echo "mailbox: ssh -L 4573:127.0.0.1:4573 $TARGET   then open http://localhost:4573   (the verifier's mail, unless SMTP_HOST is set)"
 echo "check:   ./smoke.py run   (after ./smoke.py prepare for the eID path; remove that setup again afterwards)"

@@ -10,4 +10,13 @@ else
     echo "eID proof verification: OFF (put CA certificates in deploy/test/anchors/ to enable)"
 fi
 
+# Pin the independent verification service's issuer identity (public hash, written by the verifier container).
+if [ -z "${NODETIDE_OIDC_EMAIL_ISSUERS:-}" ] && [ -s /issuer/email-issuer ]; then
+    NODETIDE_OIDC_EMAIL_ISSUERS=$(tr -d '[:space:]' < /issuer/email-issuer)
+    export NODETIDE_OIDC_EMAIL_ISSUERS
+    echo "email attestations trusted from issuer ${NODETIDE_OIDC_EMAIL_ISSUERS}"
+else
+    echo "email attestations trusted from: ${NODETIDE_OIDC_EMAIL_ISSUERS:-nobody}"
+fi
+
 exec python -m nodetide.cli.main api start --host 0.0.0.0 --port 4557

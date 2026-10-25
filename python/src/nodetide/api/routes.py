@@ -20,7 +20,6 @@ from nodetide.core.identity import (
 from nodetide.core.storage import Storage
 from nodetide.core.trust import TrustGraph, TrustDelegation
 from nodetide.api.claims import setup_claims_routes
-from nodetide.api.verifiers import setup_verifier_routes
 from nodetide.api.models import (
     APIError,
     ErrorCode,
@@ -1044,7 +1043,6 @@ def setup_routes(app: web.Application) -> None:
 
     # Claims and attestations
     setup_claims_routes(app)
-    setup_verifier_routes(app)
 
     # Recovery routes
     app.router.add_post("/api/identities/{hash}/recovery/initiate", initiate_recovery)

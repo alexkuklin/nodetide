@@ -263,19 +263,19 @@ async def userinfo(request: web.Request) -> web.Response:
 
 
 def default_claim_rules(app: web.Application, config: OIDCConfig) -> dict[str, ClaimRule]:
-    """Rules derived from what this node can verify itself plus the operator's trusted issuers.
+    """Rules derived from what the operator explicitly trusts. This node attests nothing about anyone
+    and trusts no issuer unless it is named: verifying your own claims proves nothing.
 
-    email:      attested by this node's own email verifier, or a trusted issuer
+    email:      attested by an email issuer or a trusted issuer
     phone:      only by trusted issuers
     legal_name: eIDAS qualified-signature proofs (if the node verifies them) or trusted issuers,
                 always at "high" assurance
     """
     trusted = frozenset(config.trusted_issuers)
     rules: dict[str, ClaimRule] = {}
-    verifier = app.get("email_verifier")
-    email_issuers = trusted | ({verifier.issuer.identity_hash} if verifier is not None else frozenset())
+    email_issuers = trusted | frozenset(config.email_issuers)
     if email_issuers:
-        rules["email"] = ClaimRule("email", issuers=frozenset(email_issuers))
+        rules["email"] = ClaimRule("email", issuers=email_issuers)
     if trusted:
         rules["phone"] = ClaimRule("phone", issuers=trusted)
     has_eidas = app.get("eidas_policy") is not None

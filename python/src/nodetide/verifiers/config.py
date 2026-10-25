@@ -1,6 +1,6 @@
 """Environment configuration for the email verifier.
 
-    NODETIDE_EMAIL_VERIFIER=1     turn it on (also needs NODETIDE_AUTH_AUDIENCE)
+    (used by the standalone verification service, nodetide.verifiers.service)
     NODETIDE_ISSUER_NAME          shown in emails and on the issuer identity
     NODETIDE_SMTP_HOST / _PORT / _USER / _PASSWORD / _SECURITY (starttls|ssl|none)
     NODETIDE_EMAIL_FROM           From address
@@ -21,11 +21,12 @@ class VerifierConfigError(ValueError):
     pass
 
 
-def build_email_verifier(storage: Storage, audience: str | None) -> EmailVerifier | None:
-    if os.environ.get("NODETIDE_EMAIL_VERIFIER") != "1":
+def build_email_verifier(storage: Storage, audience: str | None, *, required: bool = False) -> EmailVerifier | None:
+    """None unless NODETIDE_EMAIL_VERIFIER=1 (or `required`, as the standalone service passes)."""
+    if not required and os.environ.get("NODETIDE_EMAIL_VERIFIER") != "1":
         return None
     if not audience:
-        raise VerifierConfigError("NODETIDE_EMAIL_VERIFIER needs NODETIDE_AUTH_AUDIENCE")
+        raise VerifierConfigError("the verifier needs its public address (audience)")
 
     host = os.environ.get("NODETIDE_SMTP_HOST")
     sender: MailSender
@@ -36,8 +37,8 @@ def build_email_verifier(storage: Storage, audience: str | None) -> EmailVerifie
         sender = SMTPSender(
             host=host,
             port=int(os.environ.get("NODETIDE_SMTP_PORT", "587")),
-            username=os.environ.get("NODETIDE_SMTP_USER"),
-            password=os.environ.get("NODETIDE_SMTP_PASSWORD"),
+            username=os.environ.get("NODETIDE_SMTP_USER") or None,
+            password=os.environ.get("NODETIDE_SMTP_PASSWORD") or None,
             from_addr=from_addr,
             security=os.environ.get("NODETIDE_SMTP_SECURITY", "starttls"),
         )
@@ -45,7 +46,7 @@ def build_email_verifier(storage: Storage, audience: str | None) -> EmailVerifie
         sender = LogSender()
     else:
         raise VerifierConfigError(
-            "NODETIDE_EMAIL_VERIFIER needs NODETIDE_SMTP_HOST (or NODETIDE_EMAIL_DEV_LOG=1 for development)"
+            "the verifier needs NODETIDE_SMTP_HOST (or NODETIDE_EMAIL_DEV_LOG=1 for development)"
         )
 
     name = os.environ.get("NODETIDE_ISSUER_NAME", "Nodetide email verifier")

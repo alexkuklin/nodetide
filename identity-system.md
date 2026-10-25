@@ -501,7 +501,7 @@ The statement is signed exactly as written (UTF-8, LF line endings, no trailing 
 
 #### Verification methods
 
-**`email_code`** (assurance `low`). A verifier node checks that the holder controls an inbox.
+**`email_code`** (assurance `low`). An independent verification service (never the relying party or node that will rely on it) checks that the holder controls an inbox. The service has its own issuer identity; relying parties pin the identity hashes they accept.
 
 1. The holder sends the verifier the `ClaimDocument` and an `AuthAssertion` bound to the verifier's origin (proof that the request comes from a key of the identity; this also stops anyone using the verifier to send mail to strangers). The assertion's signed `claims` MUST be `{"purpose": "claim_verification", "claim_id": "<the claim>"}`, so the holder's consent covers exactly this claim.
 2. The verifier checks the claim exists on the holder's chain, is not revoked or expired, and matches the commitment. It emails a single-use code (valid 15 minutes) to the address, with rate limits per address, identity and client.

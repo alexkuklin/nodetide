@@ -15,6 +15,7 @@ import argparse
 import asyncio
 import base64
 import json
+import os
 import re
 import socket
 import sys
@@ -184,6 +185,27 @@ async def sign_in(env: dict[str, str], resolver, wallet, check: Check, share_cla
     return claims
 
 
+def mail_url(env: dict[str, str]) -> str:
+    """Where the verifier's mail lands. The catch-all mailbox UI is bound to this machine's loopback."""
+    return os.environ.get("SMOKE_MAIL_URL") or f"http://127.0.0.1:{env.get('MAIL_PORT', '4573')}"
+
+
+async def mailbox_code(http: aiohttp.ClientSession, base: str, address: str, since: float, wait: float = 20) -> str:
+    deadline = time.time() + wait
+    while time.time() < deadline:
+        async with http.get(f"{base}/api/v1/messages", params={"limit": 25}) as resp:
+            listing = await resp.json(content_type=None)
+        for message in listing.get("messages", []):
+            if any(t.get("Address", "").lower() == address.lower() for t in message.get("To", [])):
+                async with http.get(f"{base}/api/v1/message/{message['ID']}") as resp:
+                    text = (await resp.json(content_type=None)).get("Text", "")
+                match = re.search(r"Verification code: ([A-Z0-9]{8})", text)
+                if match:
+                    return match.group(1)
+        await asyncio.sleep(1)
+    raise RuntimeError(f"no verification email for {address} arrived at {base}")
+
+
 async def run() -> int:
     env = load_env()
     check = Check()
@@ -201,8 +223,13 @@ async def run() -> int:
         async with http.get(node + "/.well-known/openid-configuration") as resp:
             discovery = await resp.json()
         check.expect(discovery["issuer"] == node, "OIDC discovery names the public issuer", discovery["issuer"])
+        verifier_url = env["VERIFIER_URL"]
+        await wait_ready(http, verifier_url + "/health")
         async with http.get(node + "/api/verify/issuer") as resp:
-            check.expect(resp.status == 200, "email verification is enabled on the node")
+            check.expect(resp.status == 404, "the node itself verifies nothing")
+        async with http.get(verifier_url + "/api/verify/issuer") as resp:
+            verifier_info = await resp.json()
+            check.expect(resp.status == 200, "the independent verification service is up", verifier_info.get("issuer", "")[:16])
 
         async def wallet(method: str, path: str, body: dict | None = None, raw: bytes | None = None) -> dict:
             async with http.request(method, wallet_url + path, json=body if raw is None else None, data=raw,
@@ -218,8 +245,14 @@ async def run() -> int:
         email_claim = next((c for c in state["claims"] if c["claim_type"] == "email" and c["value"] == EMAIL), None)
         if email_claim is None:
             email_claim = {"claim_id": (await wallet("POST", "/api/claims/email", {"address": EMAIL}))["claim_id"]}
-        attested = await wallet("POST", f"/api/claims/{email_claim['claim_id']}/verify-email")
-        check.expect(attested["attestation"]["method"] == "email_code", "email claim verified through the test mailbox")
+        started_at = time.time()
+        await wallet("POST", f"/api/claims/{email_claim['claim_id']}/verify-email")
+        # the person reads the email and types the code: here the smoke test plays the person, from the catch-all mailbox
+        code = await mailbox_code(http, mail_url(env), EMAIL, started_at)
+        attested = await wallet("POST", f"/api/claims/{email_claim['claim_id']}/confirm-email", {"code": code})
+        check.expect(attested["attestation"]["method"] == "email_code", "email claim verified with the code from the email")
+        check.expect(attested["attestation"]["issuer"] == verifier_info["issuer"], "the attestation is signed by the verification service's own identity")
+        check.expect(attested["attestation"]["issuer"] != identity, "and not by the holder")
 
         if eid:
             name_claim = next((c for c in state["claims"] if c["claim_type"] == "legal_name"), None)

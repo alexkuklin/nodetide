@@ -1,7 +1,7 @@
 """Test wallet: stands in for the Nodetide app that does not exist yet.
 
 It holds one development identity (keys in plain JSON in its volume: never put anything real
-here), makes claims, gets them attested (email through the stack's test mailbox, legal name
+here), makes claims, gets them attested (email by an independent verification service that mails a code, legal name
 through a statement you sign with your own eID card), and approves OIDC sign-ins while choosing
 which claims to reveal. Everything is behind HTTP basic auth.
 
@@ -17,7 +17,6 @@ import html
 import json
 import logging
 import os
-import re
 import secrets
 import time
 from pathlib import Path
@@ -39,7 +38,7 @@ log = logging.getLogger("wallet")
 
 NODE_URL = os.environ["NODE_URL"].rstrip("/")
 WALLET_URL = os.environ.get("WALLET_URL", "").rstrip("/")
-MAILPIT_URL = os.environ.get("MAILPIT_URL", "http://mailpit:8025").rstrip("/")
+VERIFIER_URL = os.environ.get("VERIFIER_URL", "").rstrip("/")  # the independent email verification service
 PASSWORD = os.environ["WALLET_PASSWORD"]
 DATA_DIR = Path(os.environ.get("DATA_DIR", "/data"))
 STATE_FILE = DATA_DIR / "wallet.json"
@@ -123,8 +122,18 @@ wallet = Wallet()
 
 
 async def node(method: str, path: str, **kw: Any) -> tuple[int, Any]:
+    return await call(NODE_URL, method, path, **kw)
+
+
+async def verifier(method: str, path: str, **kw: Any) -> tuple[int, Any]:
+    if not VERIFIER_URL:
+        raise WalletError("no verification service is configured (VERIFIER_URL)", 501)
+    return await call(VERIFIER_URL, method, path, **kw)
+
+
+async def call(base: str, method: str, path: str, **kw: Any) -> tuple[int, Any]:
     async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=40)) as http:
-        async with http.request(method, NODE_URL + path, **kw) as resp:
+        async with http.request(method, base + path, **kw) as resp:
             try:
                 return resp.status, await resp.json(content_type=None)
             except Exception:
@@ -155,46 +164,46 @@ async def publish_forever(app: web.Application) -> None:
             await asyncio.sleep(3)
 
 
-async def mailbox_code(address: str, since: float, wait: float = 20) -> str:
-    """Read the verification code the node emailed to the test mailbox."""
-    deadline = time.time() + wait
-    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as http:
-        while time.time() < deadline:
-            async with http.get(f"{MAILPIT_URL}/api/v1/messages", params={"limit": 25}) as resp:
-                listing = await resp.json(content_type=None)
-            for message in listing.get("messages", []):
-                if any(t.get("Address", "").lower() == address.lower() for t in message.get("To", [])):
-                    async with http.get(f"{MAILPIT_URL}/api/v1/message/{message['ID']}") as resp:
-                        text = (await resp.json(content_type=None)).get("Text", "")
-                    match = re.search(r"Verification code: ([A-Z0-9]{8})", text)
-                    if match and time.time() - since < 600:
-                        # the newest matching message wins (the list is newest first)
-                        return match.group(1)
-            await asyncio.sleep(1)
-    raise WalletError("no verification email arrived in the test mailbox", 504)
-
-
-async def verify_email(claim_id: str) -> dict[str, Any]:
+async def start_email_verification(claim_id: str) -> dict[str, Any]:
+    """Ask the verification service to email a code. The person reads the mail and types the code (confirm_email)."""
     document = wallet.document(claim_id)
     if document.claim_type != "email":
         raise WalletError("not an email claim")
-    identity, started = wallet.identity, time.time()
-    status, request = await node("POST", "/api/auth/challenge", json={})
+    identity = wallet.identity
+    status, request = await verifier("POST", "/api/auth/challenge", json={})
     if status != 201:
-        raise WalletError(f"challenge refused: {request}", 502)
+        raise WalletError(f"the verification service refused a challenge: {request}", 502)
     assertion = create_assertion(request, identity.identity_hash or "", wallet.device, identity.sigchain.head_hash or "",
                                  claims={"purpose": "claim_verification", "claim_id": claim_id})
-    status, begun = await node("POST", "/api/verify/email/start", json={
+    status, begun = await verifier("POST", "/api/verify/email/start", json={
         "document": document.to_dict(), "assertion": assertion, "sigchain": identity.sigchain.to_list()})
     if status != 202:
-        raise WalletError(f"verification not started: {begun}", 502)
-    code = await mailbox_code(str(document.value), started)
-    status, confirmed = await node("POST", "/api/verify/email/confirm",
-                                   json={"verification_id": begun["verification_id"], "code": code})
+        raise WalletError(f"verification not started: {begun.get('message', begun)}", 502)
+    wallet.state.setdefault("verifications", {})[claim_id] = {
+        "verification_id": begun["verification_id"], "expires_at": begun["expires_at"]}
+    wallet.save()
+    return {"expires_at": begun["expires_at"], "message": begun.get("message", "")}
+
+
+async def confirm_email(claim_id: str, code: str) -> dict[str, Any]:
+    pending = wallet.state.get("verifications", {}).get(claim_id)
+    if pending is None:
+        raise WalletError("start the verification first")
+    status, confirmed = await verifier("POST", "/api/verify/email/confirm",
+                                       json={"verification_id": pending["verification_id"], "code": str(code).strip()})
     if status != 201:
-        raise WalletError(f"code not accepted: {confirmed}", 502)
-    wallet.add_attestation(confirmed["attestation"], "issued by the node")
-    return confirmed["attestation"]
+        raise WalletError(confirmed.get("message", f"code not accepted: {confirmed}"), 502 if status >= 500 else 400)
+    # keep the issuer's chain with the attestation, so it can be shown anywhere without a lookup
+    status, info = await verifier("GET", "/api/verify/issuer")
+    attestation = confirmed["attestation"]
+    if status == 200 and info.get("issuer") == attestation["issuer"]:
+        wallet.state.setdefault("issuer_chains", {})[attestation["issuer"]] = info["sigchain"]
+        who = info.get("name") or attestation["issuer"][:12]
+    else:
+        who = attestation["issuer"][:12]
+    wallet.state["verifications"].pop(claim_id, None)
+    wallet.add_attestation(attestation, f"issued by {who}")
+    return attestation
 
 
 # --- statements and signatures ---------------------------------------------------------------------------
@@ -285,7 +294,11 @@ async def signin_approve(token: str, share: list[str]) -> dict[str, Any]:
     for att in wallet.state["attestations"]:
         clean = {k: v for k, v in att.items() if not k.startswith("_")}
         if Attestation.from_dict(clean).id in share and att["claim_id"] in docs:
-            presentations.append({"document": docs[att["claim_id"]].to_dict(), "attestation": clean})
+            item = {"document": docs[att["claim_id"]].to_dict(), "attestation": clean}
+            chain = wallet.state.get("issuer_chains", {}).get(att["issuer"])
+            if chain:
+                item["issuer_sigchain"] = chain
+            presentations.append(item)
     assertion = create_assertion(challenge["request"], identity.identity_hash or "", wallet.device,
                                  identity.sigchain.head_hash or "")
     async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=60)) as http:
@@ -386,8 +399,16 @@ async def api_claim_name(request: web.Request) -> web.Response:
 
 
 async def api_verify_email(request: web.Request) -> web.Response:
-    attestation = await verify_email(request.match_info["id"])
-    return done(request, {"attestation": attestation}, "email verified by the node")
+    """Step 1: the verification service emails a code."""
+    started = await start_email_verification(request.match_info["id"])
+    return done(request, started, "A code was emailed. Type it below to finish.")
+
+
+async def api_confirm_email(request: web.Request) -> web.Response:
+    """Step 2: the person types the code from the email."""
+    data = await params(request)
+    attestation = await confirm_email(request.match_info["id"], str(data.get("code", "")))
+    return done(request, {"attestation": attestation}, "Email verified.")
 
 
 async def api_statement(request: web.Request) -> web.Response:
@@ -493,7 +514,12 @@ async def dashboard(request: web.Request) -> web.Response:
                        f"<span class='muted'>{esc(a['node_verdict'])}</span></div>" for a in c["attestations"]) or "none"
         cid = esc(c["claim_id"])
         if c["claim_type"] == "email":
-            actions = f'<form method="post" action="/api/claims/{cid}/verify-email"><button>Verify (reads the code from the test mailbox)</button></form>'
+            waiting = c["claim_id"] in wallet.state.get("verifications", {})
+            actions = (f'<form method="post" action="/api/claims/{cid}/verify-email"><button>'
+                       f'{"Send a new code" if waiting else "Verify by email"}</button></form>')
+            if waiting:
+                actions += (f'<form method="post" action="/api/claims/{cid}/confirm-email">Code from the email: '
+                            f'<input name="code" required maxlength="16" autocomplete="off" size="12"> <button>Confirm</button></form>')
         else:
             download = f' <a href="/api/claims/{cid}/statement">download statement</a>' if c["has_statement"] else ""
             actions = (f'<form method="post" action="/api/claims/{cid}/statement"><button>Create statement to sign</button>{download}</form>'
@@ -513,7 +539,7 @@ async def dashboard(request: web.Request) -> web.Response:
 <h2>Approve a sign-in</h2>
 <form method="post" action="/api/signin/preview">Sign-in address from the application:
 <input type="url" name="login_url" required placeholder="{esc(NODE_URL)}/oidc/login/..."> <button>Look at it</button></form>
-<p class="muted">The test mailbox (verification emails) is private to the server: open it through an SSH tunnel to port 4573.</p>"""
+<p class="muted">Email claims are verified by an independent service ({esc(VERIFIER_URL or 'not configured')}): it emails you a code, you type it here.</p>"""
     return web.Response(text=layout(body, request), content_type="text/html")
 
 
@@ -531,6 +557,7 @@ def build_app() -> web.Application:
     app.router.add_post("/api/claims/email", api_claim_email)
     app.router.add_post("/api/claims/name", api_claim_name)
     app.router.add_post("/api/claims/{id}/verify-email", api_verify_email)
+    app.router.add_post("/api/claims/{id}/confirm-email", api_confirm_email)
     app.router.add_route("*", "/api/claims/{id}/statement", api_statement)
     app.router.add_post("/api/claims/{id}/signature", api_signature)
     app.router.add_post("/api/signin/preview", api_signin_preview)

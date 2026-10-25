@@ -3,6 +3,27 @@
 Progress notes kept between sessions. Newest first. Each entry says what changed, why, and what is
 still open, so a new session can pick up without re-deriving context.
 
+## 2026-10-25 (trust) - email verification is an independent service
+
+### Changed
+- **No self-verification.** A node no longer runs a verifier (`NODETIDE_EMAIL_VERIFIER` and `create_app(email_verifier=)` are gone,
+  as are `/api/verify/*` on nodes) and the OIDC bridge trusts no issuer it was not told about. Email attestations are accepted
+  only from identity hashes in the new `NODETIDE_OIDC_EMAIL_ISSUERS` (email only; `TRUSTED_ISSUERS` still covers all types).
+- **`nodetide.verifiers.service`**: the verifier as a standalone aiohttp service (`python -m nodetide.verifiers.service`) with
+  its own database, its own issuer identity, its own public address (the audience of key-control proofs), `/health`,
+  `/api/auth/challenge`, `/api/verify/issuer` (now includes the issuer's sigchain) and `/api/verify/email/start|confirm`.
+  `NODETIDE_VERIFIER_PUBLISH_ISSUER` writes the issuer hash for the operator to pin.
+- **Wallet**: starts the verification at the service, then asks the person for the emailed code (it no longer reads a mailbox,
+  so no ssh tunnel); stores the issuer's chain and sends it with the presentation (`issuer_sigchain`), so the bridge needs no lookup.
+- **Test stack**: new `verifier` container (`nt-verifier.<domain>`, port 4575); its issuer hash goes through a shared volume
+  into the node's entrypoint; SMTP settings in `.env` send real mail (default: catch-all mailpit). `init.sh --upgrade` adds
+  the new settings. `local-wallet.sh --tunnel` is replaced by `--verifier`. Smoke test plays the person (reads the code from
+  mailpit) and checks the attestation is signed by the service identity; passes locally.
+
+### Open
+- Old attestations made by the node's former embedded issuer are no longer trusted: verify email again in the wallet.
+- Attestations are not yet revocable through the service API (the issuer can sign revocations; no endpoint).
+
 ## 2026-10-25 (sign-in) - "Open in wallet" links for web wallets
 
 ### Added

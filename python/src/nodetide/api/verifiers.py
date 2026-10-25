@@ -1,4 +1,4 @@
-"""HTTP API of the node's claim verifiers (currently: email)."""
+"""HTTP API of a claim verification service (currently: email). Served by nodetide.verifiers.service, not by nodes."""
 
 from __future__ import annotations
 
@@ -18,11 +18,13 @@ async def issuer_info(request: web.Request) -> web.Response:
     """GET /verify/issuer - who issues attestations here, and for which claims."""
     verifier: EmailVerifier | None = request.app.get("email_verifier")
     if verifier is None:
-        return error("not_configured", "This node does not verify claims", 404)
+        return error("not_configured", "This service does not verify claims", 404)
     return web.json_response({
         "issuer": verifier.issuer.identity_hash,
         "name": verifier.issuer.name,
         "audience": request.app.get("auth_audience"),
+        # so a holder can present its attestations anywhere without a lookup
+        "sigchain": verifier.issuer.identity.sigchain.to_list(),
         "methods": [{
             "method": verifier.method,
             "claim_type": verifier.claim_type,
@@ -43,7 +45,7 @@ async def email_start(request: web.Request) -> web.Response:
     verifier: EmailVerifier | None = request.app.get("email_verifier")
     audience = request.app.get("auth_audience")
     if verifier is None or not audience:
-        return error("not_configured", "Email verification is not enabled on this node", 501)
+        return error("not_configured", "Email verification is not enabled", 501)
 
     storage: Storage = request.app["storage"]
     challenges: ChallengeStore = request.app["challenge_store"]
@@ -65,7 +67,7 @@ async def email_start(request: web.Request) -> web.Response:
     if challenge is None:
         return error("unknown_challenge", "Challenge is unknown, already used, or expired", 401)
     if challenge.aud != audience:
-        return error("wrong_audience", "Challenge was not issued for this node", 401)
+        return error("wrong_audience", "Challenge was not issued for this service", 401)
 
     chain, err = resolve_chain(storage, document.identity, data.get("sigchain"))
     if err is not None:
@@ -98,7 +100,7 @@ async def email_confirm(request: web.Request) -> web.Response:
     """POST /verify/email/confirm - {"verification_id": "...", "code": "..."}"""
     verifier: EmailVerifier | None = request.app.get("email_verifier")
     if verifier is None:
-        return error("not_configured", "Email verification is not enabled on this node", 501)
+        return error("not_configured", "Email verification is not enabled", 501)
     data = await read_object(request)
     if isinstance(data, web.Response):
         return data

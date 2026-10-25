@@ -8,10 +8,12 @@ in plain JSON and the mailbox is a catch-all.
 browser ──► rp (oauth2-proxy) ──► "Signed in" page (shows the claims it received)
    │            │ standard OIDC: discovery, PKCE, client secret, RS256 id_token
    │            ▼
-   ├──────► node (Nodetide: OIDC bridge, email verifier, eID proof verifier, explorer)
-   │            │ verification codes by SMTP
+   ├──────► node (Nodetide: OIDC bridge, eID proof verifier, explorer; verifies nobody itself)
+   │
+   ├──────► verifier (independent email verification service, own issuer identity)
+   │            │ one-time codes by SMTP
    │            ▼
-   │         mailpit (catches the emails; nothing is ever delivered)
+   │         mailpit (catch-all: the codes land here unless SMTP_HOST is set in .env)
    └──────► wallet (stands in for the Nodetide app: identity, claims, signs-in on your behalf)
 ```
 
@@ -21,8 +23,9 @@ browser ──► rp (oauth2-proxy) ──► "Signed in" page (shows the claims
 | `rp` | oauth2-proxy + a page that prints the received claims | `nt-rp.<domain>` | 4571 |
 | `wallet` | test wallet (HTTP basic auth, user `wallet`) | `nt-wallet.<domain>` | 4572 |
 | `grafana` | Grafana with native OIDC: an ordinary third-party app as the guinea pig | `nt-grafana.<domain>` | 4574 |
-| `mailpit` | test mailbox UI (private: SSH tunnel) | - | 4573 |
-| `edge` | optional Caddy with automatic HTTPS | all four | 80 / 443 |
+| `verifier` | independent email verification service: own storage, own issuer identity | `nt-verifier.<domain>` | 4575 |
+| `mailpit` | catch-all mailbox for the verifier's mail (private; SSH tunnel to read it) | - | 4573 |
+| `edge` | optional Caddy with automatic HTTPS | all five | 80 / 443 |
 
 Everything binds to `127.0.0.1`. The browser and the containers use the very same public URLs
 (the containers reach them through `host-gateway`), so what works here is what a real client sees.
@@ -107,10 +110,10 @@ The wallet only makes outbound HTTPS calls to the node, so it can run locally an
 instead of on the server:
 
 ```sh
-./local-wallet.sh https://nt-node.<domain> --tunnel deploy@<server>   # then open http://localhost:4572
+./local-wallet.sh https://nt-node.<domain>   # then open http://localhost:4572
 ```
 
-`--tunnel` forwards the server's test mailbox (port 4573) so email verification still works. State is in
+It talks to the verification service at `nt-verifier.<domain>` (override with `--verifier URL`). State is in
 `.local-wallet/` (git-ignored); the password is generated once and printed. Use the local wallet's identity for
 sign-ins instead of the one on the server (the server's wallet service can simply stay unused).
 
@@ -122,3 +125,15 @@ in Grafana as a Viewer whose login is your identity hash (the email is the verif
 placeholder `@nodetide.invalid`). The local `admin` account (password `GRAFANA_ADMIN_PASSWORD` in `.env`) stays
 available so you cannot lock yourself out. On an existing server run `./init.sh --upgrade` once; it adds the
 Grafana settings and keeps every existing secret. The workflow does that automatically.
+
+## Email verification is a separate service
+
+The `verifier` container is a party of its own: its own process, database and issuer identity, nothing shared with
+the node except one public value. It emails a one-time code; **you read the email and type the code into the wallet**
+(the wallet never reads a mailbox). The node trusts no issuer by default: the verifier writes its identity hash to a
+shared file and the node's entrypoint pins it as `NODETIDE_OIDC_EMAIL_ISSUERS`, for email claims only.
+
+- By default the mail goes to the catch-all `mailpit`, readable with `ssh -L 4573:127.0.0.1:4573 <server>` and
+  http://localhost:4573.
+- To receive real mail set `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURITY` (starttls|ssl|none), `SMTP_USER`, `SMTP_PASSWORD` and
+  `EMAIL_FROM` in `.env` on the server, then `docker compose up -d verifier`.

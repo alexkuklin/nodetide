@@ -43,29 +43,33 @@ JSON
 if [ "$UPGRADE" = 1 ]; then
     [ -f .env ] || { echo "no .env to upgrade" >&2; exit 1; }
     . ./.env
-    if grep -q '^GRAFANA_HOST=' .env; then
-        # nothing to add, but config/ is not kept anywhere else: rebuild it from the secrets in .env
-        write_clients "$OIDC_CLIENT_SECRET" "$GRAFANA_CLIENT_SECRET" "$RP_URL" "$GRAFANA_URL"
-        echo ".env is up to date; config/clients.json rebuilt from it"
-        exit 0
-    fi
     BASE=${NODE_HOST#nt-node.}
-    G_HOST=nt-grafana.$BASE
-    G_URL=$(printf '%s' "$NODE_URL" | sed "s|$NODE_HOST|$G_HOST|")
-    G_SITE=$(printf '%s' "$NODE_SITE" | sed "s|$NODE_HOST|$G_HOST|")
-    G_SECRET=$(secret 32); G_ADMIN=$(secret 18)
+    host_url() { printf '%s' "$1" | sed "s|$NODE_HOST|nt-$2.$BASE|"; }   # same scheme and port as the node, another name
     umask 077
-    cat >> .env <<ENV
+    if ! grep -q '^GRAFANA_HOST=' .env; then
+        cat >> .env <<ENV
 
-GRAFANA_HOST=$G_HOST
-GRAFANA_URL=$G_URL
-GRAFANA_SITE=$G_SITE
-GRAFANA_CLIENT_SECRET=$G_SECRET
-GRAFANA_ADMIN_PASSWORD=$G_ADMIN
+GRAFANA_HOST=nt-grafana.$BASE
+GRAFANA_URL=$(host_url "$NODE_URL" grafana)
+GRAFANA_SITE=$(host_url "$NODE_SITE" grafana)
+GRAFANA_CLIENT_SECRET=$(secret 32)
+GRAFANA_ADMIN_PASSWORD=$(secret 18)
 ENV
-    write_clients "$OIDC_CLIENT_SECRET" "$G_SECRET" "$RP_URL" "$G_URL"
-    echo "upgraded .env and config/clients.json (existing secrets kept)"
-    echo "  grafana: $G_URL   (needs a DNS name; admin password in .env as GRAFANA_ADMIN_PASSWORD)"
+        echo "added Grafana settings"
+    fi
+    if ! grep -q '^VERIFIER_HOST=' .env; then
+        cat >> .env <<ENV
+
+VERIFIER_HOST=nt-verifier.$BASE
+VERIFIER_URL=$(host_url "$NODE_URL" verifier)
+VERIFIER_SITE=$(host_url "$NODE_SITE" verifier)
+ENV
+        echo "added verification service settings (needs a DNS name: nt-verifier.$BASE)"
+    fi
+    . ./.env
+    # config/ is not kept anywhere else: rebuild it from the secrets in .env
+    write_clients "$OIDC_CLIENT_SECRET" "$GRAFANA_CLIENT_SECRET" "$RP_URL" "$GRAFANA_URL"
+    echo ".env is up to date; config/clients.json rebuilt from it (existing secrets kept)"
     exit 0
 fi
 
@@ -76,14 +80,14 @@ GRAFANA_SECRET=$(secret 32)
 GRAFANA_ADMIN=$(secret 18)
 
 if [ "$MODE" = local ]; then
-    NODE_HOST=nt-node.localtest.me; RP_HOST=nt-rp.localtest.me; WALLET_HOST=nt-wallet.localtest.me; GRAFANA_HOST=nt-grafana.localtest.me
+    NODE_HOST=nt-node.localtest.me; RP_HOST=nt-rp.localtest.me; WALLET_HOST=nt-wallet.localtest.me; GRAFANA_HOST=nt-grafana.localtest.me; VERIFIER_HOST=nt-verifier.localtest.me
     PORT=":8080"; SCHEME=http; ALLOW_INSECURE=1; COOKIE_SECURE=false; SKIP_TLS=false
-    NODE_SITE="http://$NODE_HOST:8080"; RP_SITE="http://$RP_HOST:8080"; WALLET_SITE="http://$WALLET_HOST:8080"; GRAFANA_SITE="http://$GRAFANA_HOST:8080"
+    NODE_SITE="http://$NODE_HOST:8080"; RP_SITE="http://$RP_HOST:8080"; WALLET_SITE="http://$WALLET_HOST:8080"; GRAFANA_SITE="http://$GRAFANA_HOST:8080"; VERIFIER_SITE="http://$VERIFIER_HOST:8080"
     EDGE_HTTP=8080; EDGE_HTTPS=8443; PROFILES=edge
 else
-    NODE_HOST=nt-node.$DOMAIN; RP_HOST=nt-rp.$DOMAIN; WALLET_HOST=nt-wallet.$DOMAIN; GRAFANA_HOST=nt-grafana.$DOMAIN
+    NODE_HOST=nt-node.$DOMAIN; RP_HOST=nt-rp.$DOMAIN; WALLET_HOST=nt-wallet.$DOMAIN; GRAFANA_HOST=nt-grafana.$DOMAIN; VERIFIER_HOST=nt-verifier.$DOMAIN
     PORT=""; SCHEME=https; ALLOW_INSECURE=0; COOKIE_SECURE=true; SKIP_TLS=false
-    NODE_SITE=$NODE_HOST; RP_SITE=$RP_HOST; WALLET_SITE=$WALLET_HOST; GRAFANA_SITE=$GRAFANA_HOST
+    NODE_SITE=$NODE_HOST; RP_SITE=$RP_HOST; WALLET_SITE=$WALLET_HOST; GRAFANA_SITE=$GRAFANA_HOST; VERIFIER_SITE=$VERIFIER_HOST
     EDGE_HTTP=80; EDGE_HTTPS=443; PROFILES=""
     [ "$EDGE" = 1 ] && PROFILES=edge
 fi
@@ -99,6 +103,8 @@ RP_URL=$SCHEME://$RP_HOST$PORT
 WALLET_URL=$SCHEME://$WALLET_HOST$PORT
 GRAFANA_HOST=$GRAFANA_HOST
 GRAFANA_URL=$SCHEME://$GRAFANA_HOST$PORT
+VERIFIER_HOST=$VERIFIER_HOST
+VERIFIER_URL=$SCHEME://$VERIFIER_HOST$PORT
 
 OIDC_CLIENT_ID=test-rp
 OIDC_CLIENT_SECRET=$CLIENT_SECRET
@@ -116,6 +122,7 @@ NODE_SITE=$NODE_SITE
 RP_SITE=$RP_SITE
 WALLET_SITE=$WALLET_SITE
 GRAFANA_SITE=$GRAFANA_SITE
+VERIFIER_SITE=$VERIFIER_SITE
 EDGE_HTTP_PORT=$EDGE_HTTP
 EDGE_HTTPS_PORT=$EDGE_HTTPS
 COMPOSE_PROFILES=$PROFILES
@@ -127,4 +134,5 @@ echo "wrote .env and config/clients.json"
 echo "  node:   $SCHEME://$NODE_HOST$PORT    (explorer at /explorer/)"
 echo "  rp:     $SCHEME://$RP_HOST$PORT      (sign in with Nodetide, see the claims it receives)"
 echo "  wallet: $SCHEME://$WALLET_HOST$PORT  (user 'wallet', password in .env as WALLET_PASSWORD)"
+echo "  verifier: $SCHEME://$VERIFIER_HOST$PORT  (independent email verification service with its own issuer identity)"
 echo "  grafana: $SCHEME://$GRAFANA_HOST$PORT  (an ordinary application with native OIDC; local admin password in .env)"

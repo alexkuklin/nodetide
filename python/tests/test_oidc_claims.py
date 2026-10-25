@@ -48,7 +48,9 @@ class Holder:
         return self.world.attest()
 
     def email_presentation(self, **kw) -> dict:
-        return {"document": self.email_doc.to_dict(), "attestation": (kw.get("attestation") or self.email_attestation()).to_dict()}
+        issuer = kw.get("issuer") or self.verifier.issuer
+        return {"document": self.email_doc.to_dict(), "attestation": (kw.get("attestation") or self.email_attestation(issuer)).to_dict(),
+                "issuer_sigchain": issuer.identity.sigchain.to_list()}
 
     def name_presentation(self, attestation=None, document=None) -> dict:
         return {"document": (document or self.world.doc).to_dict(), "attestation": (attestation or self.name_attestation()).to_dict()}
@@ -58,12 +60,15 @@ class Holder:
 async def bridge():
     storage = Storage.memory()
     world = World()
-    verifier = EmailVerifier(storage, NodeIssuer.load_or_create(storage, "Node Verifier"), MemorySender())
+    # the verifier is an independent service with its own storage; the bridge trusts it only because it is named
+    verifier_storage = Storage.memory()
+    verifier = EmailVerifier(verifier_storage, NodeIssuer.load_or_create(verifier_storage, "Independent Verifier"), MemorySender())
     net = FakeNetwork()
     config = OIDCConfig(issuer="https://bridge.test", clients={SPA.client_id: SPA},
-                        seed_nodes=["https://seed.example.net"])
+                        seed_nodes=["https://seed.example.net"],
+                        email_issuers=[verifier.issuer.identity_hash])
     app = create_app(storage=storage, oidc_config=config, oidc_fetch=net.fetch,
-                     email_verifier=verifier, eidas_policy=world.policy, auth_audience="https://node.test")
+                     eidas_policy=world.policy, auth_audience="https://node.test")
 
     async def no_background() -> None:
         return None
@@ -156,7 +161,7 @@ async def test_untrusted_issuer_is_not_believed(bridge):
     h = bridge.holder
     stranger = NodeIssuer.load_or_create(Storage.memory(), "Some Other Verifier")
     bridge.storage.save_sigchain(stranger.identity.sigchain)
-    rej, claims = await rejected(bridge, h.email_presentation(attestation=h.email_attestation(issuer=stranger)))
+    rej, claims = await rejected(bridge, h.email_presentation(attestation=h.email_attestation(issuer=stranger), issuer=stranger))
     assert rej == [{"claim_type": "email", "code": "issuer_not_accepted"}] and "email" not in claims
 
 
@@ -167,7 +172,7 @@ async def test_trusted_issuers_can_be_added_by_the_operator(bridge):
     rules = dict(bridge.provider.claim_rules)
     rules["email"] = ClaimRule("email", issuers=rules["email"].issuers | {stranger.identity_hash})
     bridge.provider.claim_rules = rules
-    _, claims, _ = await sign_in(bridge, [h.email_presentation(attestation=h.email_attestation(issuer=stranger))])
+    _, claims, _ = await sign_in(bridge, [h.email_presentation(attestation=h.email_attestation(issuer=stranger), issuer=stranger)])
     assert claims["email"] == ADDRESS
 
 
@@ -356,3 +361,26 @@ def test_rules_enforce_age_and_method():
     assert evaluate_claim(base, doc, att, holder.sigchain, None).code == "unknown_issuer"
     wrong = ClaimRule("phone", issuers=base.issuers)
     assert evaluate_claim(wrong, doc, att, holder.sigchain, issuer.identity.sigchain).code == "wrong_claim_type"
+
+
+async def test_nothing_is_trusted_unless_named(bridge):
+    """A bridge trusts no email issuer by default, including any verifier that happens to run beside it."""
+    from nodetide.oidc.handlers import default_claim_rules
+
+    app = bridge.client.app
+    config = OIDCConfig(issuer="https://b.example.org", clients={})
+    assert "email" not in default_claim_rules(app, config)
+    named = OIDCConfig(issuer="https://b.example.org", clients={}, email_issuers=["a" * 64])
+    rules = default_claim_rules(app, named)
+    assert rules["email"].issuers == frozenset({"a" * 64}) and "phone" not in rules
+
+
+def test_email_issuers_come_from_the_environment_and_must_be_hashes(monkeypatch):
+    from nodetide.oidc.config import ConfigError
+
+    monkeypatch.setenv("NODETIDE_OIDC_ISSUER", "https://b.example.org")
+    monkeypatch.setenv("NODETIDE_OIDC_EMAIL_ISSUERS", f" {'A' * 64} , {'b' * 64} ")
+    assert OIDCConfig.from_env().email_issuers == ["a" * 64, "b" * 64]
+    monkeypatch.setenv("NODETIDE_OIDC_EMAIL_ISSUERS", "not-a-hash")
+    with pytest.raises(ConfigError):
+        OIDCConfig.from_env()

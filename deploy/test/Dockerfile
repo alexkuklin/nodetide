@@ -16,7 +16,7 @@ COPY deploy/test/wallet/ /opt/wallet/
 COPY deploy/test/echo/ /opt/echo/
 RUN chmod +x /opt/entrypoint.sh \
     && useradd --create-home --shell /bin/bash nodetide \
-    && mkdir -p /data && chown nodetide:nodetide /data
+    && mkdir -p /data /share && chown nodetide:nodetide /data /share
 
 USER nodetide
 ENV NODETIDE_HOST=0.0.0.0 NODETIDE_PORT=4557 NODETIDE_DB_PATH=/data/nodetide.db NODETIDE_WEB_ROOT=/app/web

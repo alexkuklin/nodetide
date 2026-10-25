@@ -14,6 +14,7 @@ x-hosts: &hosts
     - "${RP_HOST}:host-gateway"
     - "${WALLET_HOST}:host-gateway"
     - "${GRAFANA_HOST}:host-gateway"
+    - "${VERIFIER_HOST}:host-gateway"
 
 x-image: &image
   image: nodetide-test:${IMAGE_TAG:-local}
@@ -37,24 +38,20 @@ services:
       NODETIDE_OIDC_ALLOW_INSECURE: ${ALLOW_INSECURE:-0}
       # the sign-in page offers "open in wallet" for the stack's wallet and for one on the user's own machine
       NODETIDE_OIDC_WALLET_URLS: ${WALLET_URL},http://localhost:${LOCAL_WALLET_PORT:-4572}
-      # email claims verified through the test mailbox (nothing leaves the stack)
-      NODETIDE_EMAIL_VERIFIER: "1"
-      NODETIDE_SMTP_HOST: mailpit
-      NODETIDE_SMTP_PORT: "1025"
-      NODETIDE_SMTP_SECURITY: none
-      NODETIDE_EMAIL_FROM: verify@${NODE_HOST}
-      NODETIDE_ISSUER_NAME: Nodetide test verifier
+      # This node verifies nobody. It believes email attestations only from the verification service named in
+      # /issuer/email-issuer (written by the verifier container; the entrypoint passes it on as NODETIDE_OIDC_EMAIL_ISSUERS).
       # qualified-signature proofs, judged against ./anchors
       NODETIDE_EIDAS_REVOCATION: ${EIDAS_REVOCATION:-hard-fail}
     volumes:
       - node-data:/data
+      - issuer-share:/issuer:ro
       - ./config:/config:ro
       - ${ANCHORS_DIR:-./anchors}:/anchors:ro
     ports:
       - "127.0.0.1:${NODE_PORT:-4570}:4557"
     depends_on:
-      mailpit:
-        condition: service_started
+      verifier:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:4557/health')"]
       interval: 15s
@@ -62,13 +59,47 @@ services:
       retries: 5
       start_period: 10s
 
+  # An independent party: own process, own storage, own issuer identity. It shares nothing with the node except the
+  # (public) hash of its issuer identity, which the operator pins in the node.
+  verifier:
+    <<: [*hosts, *image]
+    restart: unless-stopped
+    command: ["python", "-m", "nodetide.verifiers.service", "--host", "0.0.0.0", "--port", "4558"]
+    environment:
+      GIT_COMMIT: ${GIT_COMMIT:-unknown}
+      NODETIDE_VERIFIER_URL: ${VERIFIER_URL}
+      NODETIDE_VERIFIER_HOME: /data
+      NODETIDE_VERIFIER_PUBLISH_ISSUER: /share/email-issuer
+      NODETIDE_ISSUER_NAME: Nodetide test email verifier
+      # mail goes to the catch-all mailbox below unless SMTP_HOST is set in .env (then to the real recipient)
+      NODETIDE_SMTP_HOST: ${SMTP_HOST:-mailpit}
+      NODETIDE_SMTP_PORT: ${SMTP_PORT:-1025}
+      NODETIDE_SMTP_SECURITY: ${SMTP_SECURITY:-none}
+      NODETIDE_SMTP_USER: ${SMTP_USER:-}
+      NODETIDE_SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      NODETIDE_EMAIL_FROM: ${EMAIL_FROM:-verify@${VERIFIER_HOST}}
+    volumes:
+      - verifier-data:/data
+      - issuer-share:/share
+    ports:
+      - "127.0.0.1:${VERIFIER_PORT:-4575}:4558"
+    depends_on:
+      mailpit:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:4558/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 8s
+
   mailpit:
     image: axllent/mailpit:v1.27
     restart: unless-stopped
     environment:
       MP_MAX_MESSAGES: "500"
     ports:
-      - "127.0.0.1:${MAIL_PORT:-4573}:8025"   # the mailbox UI; keep it private (SSH tunnel)
+      - "127.0.0.1:${MAIL_PORT:-4573}:8025"   # catch-all mailbox UI (only holds the verifier's mail); keep it private
 
   wallet:
     <<: [*hosts, *image]
@@ -77,7 +108,7 @@ services:
     environment:
       NODE_URL: ${NODE_URL}
       WALLET_URL: ${WALLET_URL}
-      MAILPIT_URL: http://mailpit:8025
+      VERIFIER_URL: ${VERIFIER_URL}
       WALLET_PASSWORD: ${WALLET_PASSWORD}
       DATA_DIR: /data
       PORT: "4572"
@@ -123,6 +154,8 @@ services:
       - "127.0.0.1:${GRAFANA_PORT:-4574}:3000"
     depends_on:
       node:
+        condition: service_healthy
+      verifier:
         condition: service_healthy
 
   echo:
@@ -177,6 +210,7 @@ services:
       RP_SITE: ${RP_SITE}
       WALLET_SITE: ${WALLET_SITE}
       GRAFANA_SITE: ${GRAFANA_SITE}
+      VERIFIER_SITE: ${VERIFIER_SITE}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy-data:/data
@@ -189,6 +223,8 @@ services:
 
 volumes:
   node-data:
+  verifier-data:
+  issuer-share:
   wallet-data:
   grafana-data:
   caddy-data:
