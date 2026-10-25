@@ -61,3 +61,4 @@ deploy/test/anchors/*
 tfplan
 terraform.tfvars
 crash.log
+deploy/test/.local-wallet/

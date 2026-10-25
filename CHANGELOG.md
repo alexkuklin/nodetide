@@ -17,8 +17,12 @@ still open, so a new session can pick up without re-deriving context.
   overrides), `test-stack` environment for approvals, concurrency lock, ssh wait for cloud-init, reuses the server's
   existing `.env` so redeploys keep secrets and data. Required secrets/variables and `gh` commands: `deploy/test/terraform/README.md`.
 
+### Also
+- `deploy/test/local-wallet.sh`: run the test wallet on your own machine against a remote node (keys stay local;
+  optional ssh tunnel to the test mailbox). `wallet/app.py` honours `HOST`.
+
 ### Open
-- Never applied against a real account: no token yet. Validated with `terraform validate`, `fmt` and the offline tests only.
+- Applied once to a real account (cpx22@fsn1, cx23 was sold out everywhere); stack serves valid certificates.
 - Workflow untested on GitHub (needs the secrets above and the `test-stack` environment).
 - Domain / who serves 80 and 443 on the target is still undecided.
 

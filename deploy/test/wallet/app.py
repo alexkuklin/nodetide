@@ -538,4 +538,4 @@ def build_app() -> web.Application:
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    web.run_app(build_app(), host="0.0.0.0", port=int(os.environ.get("PORT", "4572")), print=None)
+    web.run_app(build_app(), host=os.environ.get("HOST", "0.0.0.0"), port=int(os.environ.get("PORT", "4572")), print=None)

@@ -99,3 +99,16 @@ wallet's volume does keep the attestation file, so `docker compose down -v` when
 ## Server on Hetzner
 
 `terraform/` creates the server (checking real availability) and `.github/workflows/test-stack.yml` applies it manually; see `terraform/README.md` for the required secrets.
+
+## Wallet on your own machine
+
+The wallet only makes outbound HTTPS calls to the node, so it can run locally and keep its keys on your machine
+instead of on the server:
+
+```sh
+./local-wallet.sh https://nt-node.<domain> --tunnel deploy@<server>   # then open http://localhost:4572
+```
+
+`--tunnel` forwards the server's test mailbox (port 4573) so email verification still works. State is in
+`.local-wallet/` (git-ignored); the password is generated once and printed. Use the local wallet's identity for
+sign-ins instead of the one on the server (the server's wallet service can simply stay unused).
