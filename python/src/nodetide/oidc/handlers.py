@@ -268,8 +268,9 @@ def default_claim_rules(app: web.Application, config: OIDCConfig) -> dict[str, C
 
     email:      attested by an email issuer or a trusted issuer
     phone:      attested by a phone issuer or a trusted issuer
-    legal_name: eIDAS qualified-signature proofs (if the node verifies them) or trusted issuers,
-                always at "high" assurance
+    legal_name, birthdate, age_over_18:
+                attested by an eID notary or a trusted issuer, always at "high" assurance (legal_name also by
+                eIDAS qualified-signature proofs, if this node verifies them itself: that shows it the certificate)
     """
     trusted = frozenset(config.trusted_issuers)
     rules: dict[str, ClaimRule] = {}
@@ -280,11 +281,15 @@ def default_claim_rules(app: web.Application, config: OIDCConfig) -> dict[str, C
     if phone_issuers:
         rules["phone"] = ClaimRule("phone", issuers=phone_issuers)
     has_eidas = app.get("eidas_policy") is not None
-    if trusted or has_eidas:
+    notaries = trusted | frozenset(config.notary_issuers)
+    if notaries or has_eidas:
         rules["legal_name"] = ClaimRule(
-            "legal_name", issuers=trusted, allow_proof=has_eidas,
+            "legal_name", issuers=notaries, allow_proof=has_eidas,
             min_assurance="high", name_leniency=config.name_match,
         )
+    if notaries:
+        for claim_type in ("birthdate", "age_over_18"):
+            rules[claim_type] = ClaimRule(claim_type, issuers=notaries, min_assurance="high")
     return rules
 
 

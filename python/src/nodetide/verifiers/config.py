@@ -3,6 +3,8 @@
     (used by the standalone verification service, nodetide.verifiers.service)
     Email is on when NODETIDE_SMTP_HOST (or NODETIDE_EMAIL_DEV_LOG=1) is set. SMS is on when a gateway token is set:
     NODETIDE_SMS_GATEWAY_TOKEN        shared secret of the SMS gateway (24+ characters)
+    NODETIDE_EIDAS_ANCHORS            directory of CA certificates: turns the eID notary on (also _REVOCATION=hard-fail|soft-fail|off)
+    NODETIDE_EIDAS_NAME_MATCH         exact|transliterated|approximate: how loosely a legal name may match the certificate
     NODETIDE_PHONE_ALLOWED            regex of numbers codes may be sent to (default: Bulgarian mobile, ^\\+359[0-9]{9}$)
     NODETIDE_ISSUER_NAME          shown in emails and on the issuer identity
     NODETIDE_SMTP_HOST / _PORT / _USER / _PASSWORD / _SECURITY (starttls|ssl|none)
@@ -84,3 +86,21 @@ def build_phone_verifier(storage: Storage, issuer: NodeIssuer) -> tuple[PhoneVer
         raise VerifierConfigError(f"NODETIDE_PHONE_ALLOWED is not a valid pattern: {e}") from e
     outbox = SmsOutbox()
     return PhoneVerifier(storage, issuer, outbox, allowed), outbox, hashlib.sha256(token.encode()).digest()
+
+
+def build_eid_notary(issuer: NodeIssuer):
+    """The eID notary, if trust anchors are configured (it refuses to start with an empty directory)."""
+    from nodetide.eidas.verify import policy_from_env
+    from nodetide.verifiers.eid_notary import EidNotary
+
+    try:
+        policy = policy_from_env()
+    except (OSError, ValueError) as e:
+        raise VerifierConfigError(f"eID trust anchors: {e}") from e
+    if policy is None:
+        return None
+    leniency = os.environ.get("NODETIDE_EIDAS_NAME_MATCH", "transliterated")
+    try:
+        return EidNotary(issuer, policy, leniency)
+    except ValueError as e:
+        raise VerifierConfigError(str(e)) from e

@@ -41,9 +41,13 @@ from nodetide.oidc.keys import OIDCSigningKey
 
 MAX_ATTEMPTS = 5000
 MAX_PRESENTATIONS = 5
+EIDAS_METHODS = frozenset({"eidas_qes", "eidas_notary"})  # backed by an eIDAS qualified signature
 
 # Which claim types each scope asks for. Nothing else is ever released.
-SCOPE_CLAIMS = {"profile": ("legal_name",), "email": ("email",), "phone": ("phone",)}
+SCOPE_CLAIMS = {
+    "profile": ("legal_name",), "email": ("email",), "phone": ("phone",),
+    "birthdate": ("birthdate",), "age_over_18": ("age_over_18",),  # separate scopes: the person may share one without the other
+}
 MAX_FAILURES = 5
 REQUEST_LIFETIME = 300  # one AuthRequest; rotated while the attempt lives
 
@@ -199,7 +203,7 @@ class OIDCProvider:
             "grant_types_supported": ["authorization_code"],
             "subject_types_supported": ["public"],
             "id_token_signing_alg_values_supported": ["RS256"],
-            "scopes_supported": ["openid", "profile", "email", "phone"],
+            "scopes_supported": ["openid", "profile", "email", "phone", "birthdate", "age_over_18"],
             "token_endpoint_auth_methods_supported": [
                 "client_secret_basic", "client_secret_post", "none",
             ],
@@ -207,9 +211,9 @@ class OIDCProvider:
             "claims_supported": [
                 "sub", "iss", "aud", "exp", "iat", "auth_time", "nonce", "name", "given_name",
                 "family_name", "name_verified", "email", "email_verified", "phone_number",
-                "phone_number_verified", "verified_claims",
+                "phone_number_verified", "birthdate", "age_over_18", "verified_claims",
             ],
-            "claims_in_verified_claims_supported": ["given_name", "family_name"],
+            "claims_in_verified_claims_supported": ["given_name", "family_name", "birthdate", "age_over_18"],
             "trust_frameworks_supported": ["eidas", "nodetide"],
         }
 
@@ -407,7 +411,7 @@ class OIDCProvider:
                 claims.update(given_name=given, family_name=family, name=f"{given} {family}", name_verified=True)
                 claims["verified_claims"] = [{
                     "verification": {
-                        "trust_framework": "eidas" if legal.method == "eidas_qes" else "nodetide",
+                        "trust_framework": "eidas" if legal.method in EIDAS_METHODS else "nodetide",
                         "assurance_level": legal.assurance,
                         "time": datetime.fromtimestamp(legal.issued_at, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
                     },
@@ -416,6 +420,18 @@ class OIDCProvider:
             elif display_name:
                 # the name in the identity's genesis event: self-asserted, so say so
                 claims.update(name=display_name, name_verified=False)
+        for claim_type in ("birthdate", "age_over_18"):
+            if claim_type in scopes and claim_type in verified:
+                item = verified[claim_type]
+                claims[claim_type] = item.value
+                claims.setdefault("verified_claims", []).append({
+                    "verification": {
+                        "trust_framework": "eidas" if item.method in EIDAS_METHODS else "nodetide",
+                        "assurance_level": item.assurance,
+                        "time": datetime.fromtimestamp(item.issued_at, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    },
+                    "claims": {claim_type: item.value},
+                })
         if "email" in scopes and "email" in verified:
             claims.update(email=verified["email"].value, email_verified=True)
         if "phone" in scopes and "phone" in verified:

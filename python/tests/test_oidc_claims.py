@@ -66,7 +66,7 @@ async def bridge():
     net = FakeNetwork()
     config = OIDCConfig(issuer="https://bridge.test", clients={SPA.client_id: SPA},
                         seed_nodes=["https://seed.example.net"],
-                        email_issuers=[verifier.issuer.identity_hash])
+                        email_issuers=[verifier.issuer.identity_hash], notary_issuers=[verifier.issuer.identity_hash])
     app = create_app(storage=storage, oidc_config=config, oidc_fetch=net.fetch,
                      eidas_policy=world.policy, auth_audience="https://node.test")
 
@@ -313,8 +313,13 @@ def test_default_rules_follow_what_the_node_can_verify():
 
     trusted = OIDCConfig(issuer="https://bridge.test", clients={}, trusted_issuers=["a" * 64])
     rules = default_claim_rules(FakeApp(), trusted)
-    assert set(rules) == {"email", "phone", "legal_name"} and not rules["legal_name"].allow_proof
+    assert set(rules) == {"email", "phone", "legal_name", "birthdate", "age_over_18"} and not rules["legal_name"].allow_proof
     assert rules["legal_name"].min_assurance == "high" and rules["phone"].issuers == frozenset({"a" * 64})
+
+    notary = OIDCConfig(issuer="https://bridge.test", clients={}, notary_issuers=["b" * 64])
+    rules = default_claim_rules(FakeApp(), notary)
+    assert set(rules) == {"legal_name", "birthdate", "age_over_18"}  # a notary says nothing about email or phone
+    assert all(r.min_assurance == "high" and r.issuers == frozenset({"b" * 64}) for r in rules.values())
 
 
 def test_configuration_is_validated():
@@ -387,3 +392,33 @@ def test_email_issuers_come_from_the_environment_and_must_be_hashes(monkeypatch)
     monkeypatch.setenv("NODETIDE_OIDC_EMAIL_ISSUERS", "not-a-hash")
     with pytest.raises(ConfigError):
         OIDCConfig.from_env()
+
+
+async def test_birthdate_and_age_are_released_only_when_asked_for_and_presented(bridge):
+    h = bridge.holder
+    born = ClaimDocument.create(h.identity.identity_hash, "birthdate", "1985-06-15")
+    adult = ClaimDocument.create(h.identity.identity_hash, "age_over_18", True)
+    for doc in (born, adult):
+        h.identity.add_claim(doc.claim_id, doc.claim_type, doc.commitment)
+    bridge.storage.save_sigchain(h.identity.sigchain)
+    issuer = h.verifier.issuer
+
+    def presentation(doc):
+        record = h.identity.sigchain.get_claim(doc.claim_id)
+        att = issuer.issue(h.identity.identity_hash, record, h.identity.sigchain.head_hash, "eidas_notary", "high",
+                           {"source": "eidas_qes", "qscd": True})
+        return {"document": doc.to_dict(), "attestation": att.to_dict(), "issuer_sigchain": issuer.identity.sigchain.to_list()}
+
+    both = [presentation(born), presentation(adult)]
+    _, claims, info = await sign_in(bridge, both, scope="openid birthdate age_over_18")
+    assert claims["birthdate"] == "1985-06-15" and claims["age_over_18"] is True and info["birthdate"] == "1985-06-15"
+    frameworks = {v["verification"]["trust_framework"] for v in claims["verified_claims"]}
+    assert frameworks == {"eidas"}
+    # the person may prove "over 18" without the date
+    _, claims, _ = await sign_in(bridge, [presentation(adult)], scope="openid birthdate age_over_18")
+    assert claims["age_over_18"] is True and "birthdate" not in claims
+    # presented but not asked for: nothing is released
+    _, claims, _ = await sign_in(bridge, both, scope="openid")
+    assert "birthdate" not in claims and "age_over_18" not in claims
+    _, claims, _ = await sign_in(bridge, both, scope="openid age_over_18")
+    assert claims["age_over_18"] is True and "birthdate" not in claims

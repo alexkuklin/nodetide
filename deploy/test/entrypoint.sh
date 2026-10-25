@@ -1,22 +1,16 @@
 #!/bin/sh
-# Starts the node. eID proof verification is switched on only when trust anchors are present:
-# the verifier refuses to start with an empty anchors directory.
+# Starts the node. The node verifies nobody and never sees a certificate: eID attestations come from the
+# verification service acting as a notary, and the node only believes the issuer it is told to.
 set -eu
 
-if [ -d /anchors ] && [ -n "$(ls -A /anchors 2>/dev/null | grep -v '^\.gitkeep$' || true)" ]; then
-    export NODETIDE_EIDAS_ANCHORS=/anchors
-    echo "eID proof verification: ON ($(ls /anchors | grep -c -v '^\.gitkeep$') trust anchor files, revocation=${NODETIDE_EIDAS_REVOCATION:-hard-fail})"
-else
-    echo "eID proof verification: OFF (put CA certificates in deploy/test/anchors/ to enable)"
-fi
-
 # Pin the independent verification service's issuer identity (public hash, written by the verifier container).
-# That one identity attests email and phone; the node trusts it for those two claim types and nothing else.
+# That one identity attests email, phone and (as eID notary) legal name, birth date and age; the node trusts it for those and nothing else.
 if [ -z "${NODETIDE_OIDC_EMAIL_ISSUERS:-}" ] && [ -s /issuer/email-issuer ]; then
     ISSUER=$(tr -d '[:space:]' < /issuer/email-issuer)
     export NODETIDE_OIDC_EMAIL_ISSUERS="$ISSUER"
     export NODETIDE_OIDC_PHONE_ISSUERS="${NODETIDE_OIDC_PHONE_ISSUERS:-$ISSUER}"
-    echo "email and phone attestations trusted from issuer $ISSUER"
+    export NODETIDE_OIDC_NOTARY_ISSUERS="${NODETIDE_OIDC_NOTARY_ISSUERS:-$ISSUER}"
+    echo "email, phone and eID-derived attestations trusted from issuer $ISSUER"
 else
     echo "email attestations trusted from: ${NODETIDE_OIDC_EMAIL_ISSUERS:-nobody}; phone: ${NODETIDE_OIDC_PHONE_ISSUERS:-nobody}"
 fi

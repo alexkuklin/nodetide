@@ -207,6 +207,7 @@ Lets any Nodetide identity sign in to standard OIDC applications (Keycloak-style
 | `NODETIDE_SEED_NODES` | Comma-separated node URLs asked for identities this node doesn't know |
 | `NODETIDE_FETCH_ALLOW_PRIVATE` | `1` to let the fetcher reach private/loopback addresses (LAN or development only) |
 | `NODETIDE_OIDC_TRUSTED_ISSUERS` | Comma-separated identity hashes trusted to attest `email`, `phone` and `legal_name`. Nothing is trusted unless named, including anything running beside the node |
+| `NODETIDE_OIDC_NOTARY_ISSUERS` | Comma-separated identity hashes trusted to attest `legal_name`, `birthdate` and `age_over_18` (eID notaries), always at high assurance |
 | `NODETIDE_OIDC_PHONE_ISSUERS` | Same for `phone` claims only |
 | `NODETIDE_OIDC_EMAIL_ISSUERS` | Comma-separated identity hashes trusted to attest `email` only, e.g. an independent verification service |
 | `NODETIDE_OIDC_NAME_MATCH` | `exact`, `transliterated` (default) or `approximate`: how loosely a legal name may differ from an eID certificate |
@@ -523,3 +524,5 @@ MIT License - see LICENSE file for details.
 5. Submit a pull request
 
 For protocol changes, update `identity-system.md` first and discuss in an issue.
+
+**eID notary** (the same verification service, `NODETIDE_EIDAS_ANCHORS` set to a directory of CA certificates; `_REVOCATION`, `NODETIDE_EIDAS_NAME_MATCH`): `POST /api/verify/eid/attest`. The person signs a *notary statement* with their eID card that names the notary and lists exactly the claims to attest (`legal_name`, `birthdate`, `age_over_18`); the card signature, which embeds the certificate and so the personal number, goes to the notary only, and the notary returns one attestation per listed claim that contains neither the certificate nor the number nor anything unlisted. Sign with `nodetide eid sign-file STATEMENT` (it shows the statement first). Applications ask for these with the scopes `profile` (legal name), `birthdate` and `age_over_18`; the wallet decides what to reveal. See `identity-system.md`, method `eidas_notary`.

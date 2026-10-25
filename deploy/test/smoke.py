@@ -82,7 +82,7 @@ def prepare() -> None:
 
     root = pki.make_ca("Smoke Test Root CA", path_length=1)
     inter = pki.make_ca("Smoke Test Qualified CA", parent=root, path_length=0)
-    leaf = pki.make_signer_cert(inter, GIVEN, FAMILY)
+    leaf = pki.make_signer_cert(inter, GIVEN, FAMILY, serial=f"PNOBG-{synthetic_egn()}")
     SMOKE.mkdir(exist_ok=True)
     (SMOKE / "anchors").mkdir(exist_ok=True)
     (SMOKE / "anchors" / "root.pem").write_bytes(root.cert.public_bytes(serialization.Encoding.PEM))
@@ -99,8 +99,15 @@ def prepare() -> None:
     lines += ["ANCHORS_DIR=./.smoke/anchors", "EIDAS_REVOCATION=off"]
     env_path.write_text("\n".join(lines) + "\n")
     print("Synthetic CA written to .smoke/ and .env now trusts it (revocation off, for the test only).")
-    print("Restart the node so it picks that up:  docker compose up -d node")
+    print("Restart the verifier (the eID notary) so it picks that up:  docker compose up -d verifier")
     print("Before using the stack for real, remove those two lines from .env and the .smoke/ folder.")
+
+
+def synthetic_egn() -> str:
+    """A well-formed Bulgarian personal number for a made-up adult born 1985-06-15 (checksum included)."""
+    prefix = "850615123"
+    check = sum(w * int(d) for w, d in zip((2, 4, 8, 5, 10, 9, 7, 3, 6), prefix)) % 11
+    return prefix + str(check if check < 10 else 0)
 
 
 def synthetic_signer():
@@ -288,16 +295,32 @@ async def run() -> int:
         await phone_check(http, env, wallet, identity, verifier_info, check)
 
         if eid:
-            name_claim = next((c for c in state["claims"] if c["claim_type"] == "legal_name"), None)
-            claim_id = name_claim["claim_id"] if name_claim else (await wallet("POST", "/api/claims/name", {"given": GIVEN, "family": FAMILY}))["claim_id"]
-            statement = (await wallet("POST", f"/api/claims/{claim_id}/statement"))["statement"]
+            print("eID (synthetic CA), attested by the notary")
+            def claim_id_of(claim_type, make):
+                found = next((c for c in state["claims"] if c["claim_type"] == claim_type), None)
+                return found["claim_id"] if found else None
+
+            name_id = claim_id_of("legal_name", None) or (await wallet("POST", "/api/claims/name", {"given": GIVEN, "family": FAMILY}))["claim_id"]
+            age_id = claim_id_of("age_over_18", None) or (await wallet("POST", "/api/claims/age"))["claim_id"]
+            born_id = claim_id_of("birthdate", None) or (await wallet("POST", "/api/claims/birthdate", {"date": "1985-06-15"}))["claim_id"]
+            # the person lists legal name and "over 18" but NOT the birth date
+            statement = (await wallet("POST", "/api/eid/statement", {"claims": [name_id, age_id]}))["statement"]
             from datetime import datetime, timezone
             from nodetide.eidas.cms import create_cades_detached
-            from nodetide.eidas.statement import parse_statement
-            parsed = parse_statement(statement)
+            from nodetide.eidas.notary_statement import parse_notary_statement
+            parsed = parse_notary_statement(statement)
+            check.expect(parsed.notary == verifier_info["issuer"], "the statement names the verification service as the notary")
             der = create_cades_detached(statement.encode(), synthetic_signer(), datetime.fromtimestamp(parsed.signed_on, tz=timezone.utc))
-            uploaded = await wallet("POST", f"/api/claims/{claim_id}/signature", raw=der)
-            check.expect(uploaded["valid"], "legal name proven by a qualified-style signature, accepted by the node", uploaded["node_verdict"])
+            uploaded = await wallet("POST", "/api/eid/signature", raw=der)
+            types = sorted(a["claim_type"] for a in uploaded["attestations"])
+            check.expect(types == ["age_over_18", "legal_name"], "the notary attested exactly the claims that were listed", str(types))
+            leaked = [needle for needle in (synthetic_egn(), "PNOBG", "1985") if needle in json.dumps(uploaded)]
+            check.expect(not leaked, "the attestations contain no personal number, no birth date and no certificate", str(leaked))
+            check.expect(all(a["issuer"] == verifier_info["issuer"] and not a.get("proof") for a in uploaded["attestations"]),
+                         "they are signed by the service identity, with no embedded proof")
+            state = await wallet("GET", "/api/state")
+            born = next(c for c in state["claims"] if c["claim_id"] == born_id)
+            check.expect(not born["attestations"], "the birth date claim has no attestation: it was left out")
 
         print("explorer privacy")
         async with http.get(f"{node}/api/explorer/identities/{identity}") as resp:
@@ -312,6 +335,7 @@ async def run() -> int:
             check.expect(shared.get("name") == f"{GIVEN} {FAMILY}" and shared.get("name_verified") is True, "verified legal name released")
             frameworks = [v["verification"]["trust_framework"] for v in shared.get("verified_claims", [])]
             check.expect(frameworks == ["eidas"], "verified_claims names the eIDAS trust framework", str(frameworks))
+            check.expect("birthdate" not in shared and "age_over_18" not in shared, "age and birth date are not released: this application did not ask")
 
         private = await sign_in(env, resolver, wallet, check, False, "not sharing")
         check.expect("email" not in private and "verified_claims" not in private, "nothing is released when the wallet shares nothing")

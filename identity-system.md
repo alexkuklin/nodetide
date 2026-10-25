@@ -418,7 +418,7 @@ A claim has two parts. Only the first goes on the sigchain.
 ```
 ADD_CLAIM = {                      # sigchain event; master or device with manage_claims
   claim_id: <128 random bits, base64url>,
-  claim_type: "email" | "phone" | "legal_name" | "x-<vendor>:<name>",
+  claim_type: "email" | "phone" | "legal_name" | "birthdate" | "age_over_18" | "x-<vendor>:<name>",
   commitment: hex(hash("nodetide-claim-v1\0" || claim_id || 0 || claim_type || 0 || salt || 0 || canonical(value))),
   expires: <unix, optional>,
   prev: <hash>, sig: ...
@@ -446,8 +446,10 @@ Normalized values (so that equal values give equal commitments):
 | `email` | string `local@domain`, domain lowercased and IDNA-encoded, local part unchanged, surrounding whitespace removed |
 | `phone` | E.164 string, e.g. `"+359881234567"` |
 | `legal_name` | `{"given_name": "...", "family_name": "..."}`, Unicode NFC, original casing |
+| `birthdate` | ISO date `"1990-04-23"`, a real date between 1880 and today |
+| `age_over_18` | the boolean `true` (a claim that is not true is simply not made). Lets a holder prove adulthood without a birth date |
 
-Strings are Unicode NFC. Personal identification numbers (national ID, tax ID) are deliberately not a claim type and MUST NOT be copied into claims or attestations.
+Strings are Unicode NFC. Personal identification numbers (national ID, tax ID) are deliberately not a claim type and MUST NOT be copied into claims or attestations. Each attribute is its own claim, so a holder reveals (and has attested) exactly the ones it chooses.
 
 #### Attestation
 
@@ -517,7 +519,17 @@ The verifier learns the address and the salt for that one claim, which is inhere
 4. the certificate chains to a trust anchor the relying party has chosen (for qualified signatures, the CA certificates of qualified trust service providers from the EU trusted lists) and is **currently** valid and not revoked.
 5. for `legal_name`, the disclosed value matches the certificate's given and family names exactly, or after transliteration of Cyrillic to Latin by the Bulgarian Streamlined System.
 
-Point 4 makes a proof-based attestation valid only while the certificate is: it is re-checked every time, and revocation fetching happens only for certificates that already chain to a configured anchor, never from URLs named by an unknown certificate. Proof attestations SHOULD be short-lived (days to weeks) because the proof carries no trusted timestamp. The certificate's personal identifier is not copied anywhere.
+**`eidas_notary`** (assurance up to `high`; `legal_name`, `birthdate`, `age_over_18`). The way to use a government eID signature **without exposing the certificate, and with the holder choosing which attributes are attested**. An independent verification service acts as a notary: the only party that ever sees the certificate.
+
+1. The holder builds a *notary statement* (`NODETIDE NOTARY STATEMENT v1`): human readable, canonical text naming the identity, the **notary's identity hash**, a chain head, a validity window and one `Claim: <id> <type> <commitment>` line per claim to attest (at most five, only the types above). Signing it with the eID card (detached CAdES) is the holder's request: it asks that notary, for exactly these claims, and states that the certificate may be read for that purpose only and must not be kept.
+2. The holder sends the statement, the signature and the claim documents to the notary over its own origin, with an `AuthAssertion` for the notary whose signed claims are `{"purpose": "eid_attestation", "statement_sha256": <hash of the statement text>}` (proof that a key of the identity asks for exactly this statement). The signature, which embeds the certificate and so the national ID number, travels to this one party and is never given to a relying party.
+3. The notary checks that the statement names it, that the identity and chain head are the holder's, that it is recent (days, not weeks), and that the signature covers the exact text. It validates the signer certificate as for `eidas_qes` (key usage, QC statements, a chain to its own trust anchors, current revocation status).
+4. For each listed claim it compares the disclosed value with the certificate: `legal_name` as in `eidas_qes`; `birthdate` against the date of birth the certificate states (the `dateOfBirth` subject attribute, or the birth date encoded in a Bulgarian `PNOBG-` personal number, checksum verified); `age_over_18` against the same date and today. It refuses on any mismatch; a certificate that states no birth date cannot attest one.
+5. It issues one ordinary `Attestation` per listed claim (method `eidas_notary`, assurance from the certificate, `evidence = {"source": "eidas_qes", "qscd": true|false}`, a lifetime of at most 90 days and never beyond the certificate). **The attestations contain no certificate, no ID number and nothing about claims that were not listed;** they can be published and shown like any other. The notary does not store or log the certificate.
+
+The price is trust in the notary: a relying party accepting `eidas_notary` attestations trusts the notary's identity (pinned by hash, per claim type, like any issuer) instead of checking the eID chain itself. Accepting the raw `eidas_qes` proof remains possible but shows the certificate to the verifier, so it is not the default.
+
+Point 4 of `eidas_qes` makes a proof-based attestation valid only while the certificate is: it is re-checked every time, and revocation fetching happens only for certificates that already chain to a configured anchor, never from URLs named by an unknown certificate. Proof attestations SHOULD be short-lived (days to weeks) because the proof carries no trusted timestamp. The certificate's personal identifier is not copied anywhere.
 
 #### Evaluating a claim
 
@@ -576,12 +588,21 @@ How much an attestation is worth is then `path trust to its issuer`, combined wi
 - Presenting the same claim to several parties lets them link the identity across services. Unlinkable presentation is out of scope.
 - Verifiers and relying parties see only the claims a holder chooses to disclose to them.
 
+### Planned: credentials with built-in selective disclosure
+
+Not implemented, and not testable yet. Two ways to prove "a government vouches for this attribute" without any party seeing an identifier:
+
+- **EU Digital Identity Wallet credentials (PID).** Member states must offer wallets; the Personal Identification Data credential is issued by the state and presented with selective disclosure (SD-JWT VC or ISO mdoc, over OpenID4VP), so the holder reveals only name, birth date or "age over 18" and never the personal number. Support would be a further verification method (and a presentation path in the bridge) whose trust anchor is the issuing state's key, with no notary needed. Timing depends on each country's wallet; Bulgaria's is unknown.
+- **Zero-knowledge proofs over a qualified signature.** The holder proves "a valid qualified signature from a certificate chaining to a trusted anchor covers this statement and the certificate states this name or birth date" without revealing the certificate, optionally with a per-context nullifier derived from the ID number for uniqueness. Feasible in principle (circuits for RSA/ECDSA verification and X.509 parsing); heavy to prove on a phone, so a research item.
+
 ### Open points
 
 - Trusted-list handling: operators currently supply the CA certificates by hand; reading and refreshing the EU trusted lists automatically is not specified.
 - Trusted timestamps (CAdES-T) are not required or checked, hence the short lifetimes above.
 - Transliteration rules beyond the Bulgarian Streamlined System.
-- Claim types other than the three defined are namespaced `x-<vendor>:<name>` and have no verification methods yet.
+- Other claim types are namespaced `x-<vendor>:<name>` and have no verification methods yet.
+- A notary can be a single point of trust and of exposure for the certificate; accepting attestations from several independent notaries is possible but nothing coordinates them.
+- Birth date extraction is defined for Bulgarian `PNOBG-` numbers and the `dateOfBirth` attribute only.
 
 ## Transport Layer
 

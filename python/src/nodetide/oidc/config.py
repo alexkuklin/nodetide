@@ -11,6 +11,7 @@ Environment:
     NODETIDE_OIDC_EMAIL_ISSUERS    comma-separated identity hashes trusted to attest EMAIL claims only (e.g. an independent
                                    verification service); nothing is trusted unless it is named here or in TRUSTED_ISSUERS
     NODETIDE_OIDC_PHONE_ISSUERS    same, for PHONE claims only
+    NODETIDE_OIDC_NOTARY_ISSUERS   same, for the eID-derived claims (legal_name, birthdate, age_over_18), which also need high assurance
     NODETIDE_OIDC_NAME_MATCH       exact|transliterated|approximate: how loosely a legal name may match an eID certificate
     NODETIDE_OIDC_WALLET_URLS      comma-separated web wallets (http(s) addresses) the sign-in page offers "open in" links for;
                                    a wallet on the user's own machine is typically http://localhost:4572
@@ -83,6 +84,7 @@ class OIDCConfig:
     trusted_issuers: list[str] = field(default_factory=list)  # extra attestation issuers to accept
     email_issuers: list[str] = field(default_factory=list)  # trusted for email claims only
     phone_issuers: list[str] = field(default_factory=list)  # trusted for phone claims only
+    notary_issuers: list[str] = field(default_factory=list)  # trusted for legal_name, birthdate, age_over_18
     name_match: str = "transliterated"
     allow_insecure: bool = False  # http:// issuer and redirect URIs: local testing only
     wallet_urls: list[str] = field(default_factory=list)  # web wallets offered on the sign-in page
@@ -99,7 +101,7 @@ class OIDCConfig:
         parts = urlsplit(self.issuer)
         if parts.query or parts.fragment:
             raise ConfigError("issuer must not contain a query or fragment")
-        for issuer in [*self.trusted_issuers, *self.email_issuers, *self.phone_issuers]:
+        for issuer in [*self.trusted_issuers, *self.email_issuers, *self.phone_issuers, *self.notary_issuers]:
             if len(issuer) != 64 or any(c not in "0123456789abcdef" for c in issuer):
                 raise ConfigError(f"trusted issuer {issuer!r} is not an identity hash")
         for wallet in self.wallet_urls:
@@ -185,6 +187,9 @@ class OIDCConfig:
             ],
             phone_issuers=[
                 h.strip().lower() for h in os.environ.get("NODETIDE_OIDC_PHONE_ISSUERS", "").split(",") if h.strip()
+            ],
+            notary_issuers=[
+                h.strip().lower() for h in os.environ.get("NODETIDE_OIDC_NOTARY_ISSUERS", "").split(",") if h.strip()
             ],
             name_match=os.environ.get("NODETIDE_OIDC_NAME_MATCH", "transliterated"),
             allow_insecure=insecure,

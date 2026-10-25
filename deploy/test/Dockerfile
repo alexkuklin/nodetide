@@ -12,9 +12,10 @@ RUN pip install .
 
 COPY web/ /app/web/
 COPY deploy/test/entrypoint.sh /opt/entrypoint.sh
+COPY deploy/test/verifier-entrypoint.sh /opt/verifier-entrypoint.sh
 COPY deploy/test/wallet/ /opt/wallet/
 COPY deploy/test/echo/ /opt/echo/
-RUN chmod +x /opt/entrypoint.sh \
+RUN chmod +x /opt/entrypoint.sh /opt/verifier-entrypoint.sh \
     && useradd --create-home --shell /bin/bash nodetide \
     && mkdir -p /data /share && chown nodetide:nodetide /data /share
 

@@ -146,3 +146,19 @@ The verification service also verifies **phone** claims: it queues an SMS and a 
 Numbers must match `PHONE_ALLOWED` (default `^\+359[0-9]{9}$`), and the gateway enforces its own mask and a count limit
 (10 per 24 h by default). The wallet shows whether the SMS is queued, sent or was refused. Without a gateway the
 messages stay queued and expire. `python3 smoke.py run` exercises the whole path with the gateway script in dry-run mode.
+
+## eID: the verification service as notary
+
+Legal name, birth date and "over 18" are proven from your eID card by the verification service acting as a notary; the
+node and the applications never see your certificate or personal number.
+
+1. In the wallet add the claims you want (legal name, birth date, "I am over 18"), tick the ones to attest and press
+   *Create the statement to sign*. The statement names the notary and lists only what you ticked.
+2. Sign it with the card on your machine: `nodetide eid sign-file notary-statement.txt` (shows the statement, asks the PIN).
+3. Upload the `.p7s` in the wallet. It goes to the notary only and is not kept; the wallet keeps the attestations, which
+   contain no certificate and nothing about the claims you left out.
+
+The notary needs the CA certificates it should trust in `deploy/test/anchors/` (**on the server's `.env`: `ANCHORS_DIR`**;
+real Borica / qualified TSP certificates for a real card; with none, the notary is off and the container says so).
+`python3 smoke.py prepare` makes a synthetic CA and points the verifier at it, `python3 smoke.py run` then covers the whole
+path, including that an unlisted birth date gets no attestation. Never deploy a `.env` that trusts the synthetic CA.

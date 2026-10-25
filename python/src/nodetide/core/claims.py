@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from datetime import date
 import secrets
 import time
 import unicodedata
@@ -33,13 +34,14 @@ MAX_ATTESTATION_LIFETIME = 2 * 365 * 86400
 DEFAULT_ATTESTATION_LIFETIME = 365 * 86400
 
 ASSURANCE_LEVELS = ("low", "substantial", "high")
-STANDARD_CLAIM_TYPES = ("email", "phone", "legal_name")
+STANDARD_CLAIM_TYPES = ("email", "phone", "legal_name", "birthdate", "age_over_18")
 
 _EXT_TYPE_RE = re.compile(r"^x-[a-z0-9]{1,32}:[a-z0-9_]{1,48}$")
 _METHOD_RE = re.compile(r"^(x-[a-z0-9]{1,32}:)?[a-z0-9_]{1,48}$")
 _CLAIM_ID_RE = re.compile(r"^[A-Za-z0-9_-]{16,64}$")
 _HASH_RE = re.compile(r"^[0-9a-f]{64}$")
 _PHONE_RE = re.compile(r"^\+[1-9][0-9]{6,14}$")
+_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _EMAIL_LOCAL_RE = re.compile(r"^[^\s@\x00-\x1f]{1,64}$")
 _DOMAIN_LABEL_RE = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")
 
@@ -127,6 +129,22 @@ def normalize_value(claim_type: str, value: Any) -> Any:
                 raise ClaimError(f"{key} must be a non-empty string")
             result[key] = _nfc(part.strip())
         return result
+
+    if claim_type == "birthdate":
+        if not isinstance(value, str) or not _DATE_RE.match(value.strip()):
+            raise ClaimError("birthdate must be a date like 1990-04-23")
+        try:
+            born = date.fromisoformat(value.strip())
+        except ValueError:
+            raise ClaimError("birthdate is not a real date") from None
+        if born > date.today() or born.year < 1880:
+            raise ClaimError("birthdate is out of range")
+        return born.isoformat()
+
+    if claim_type == "age_over_18":
+        if value is not True:
+            raise ClaimError("age_over_18 is true or it is not claimed")
+        return True
 
     normalized = _normalize_generic(value)
     if len(canonical_json(normalized)) > 2048:

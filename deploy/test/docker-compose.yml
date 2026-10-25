@@ -40,13 +40,10 @@ services:
       NODETIDE_OIDC_WALLET_URLS: ${WALLET_URL},http://localhost:${LOCAL_WALLET_PORT:-4572}
       # This node verifies nobody. It believes email attestations only from the verification service named in
       # /issuer/email-issuer (written by the verifier container; the entrypoint passes it on as NODETIDE_OIDC_EMAIL_ISSUERS).
-      # qualified-signature proofs, judged against ./anchors
-      NODETIDE_EIDAS_REVOCATION: ${EIDAS_REVOCATION:-hard-fail}
     volumes:
       - node-data:/data
       - issuer-share:/issuer:ro
       - ./config:/config:ro
-      - ${ANCHORS_DIR:-./anchors}:/anchors:ro
     ports:
       - "127.0.0.1:${NODE_PORT:-4570}:4557"
     depends_on:
@@ -64,7 +61,7 @@ services:
   verifier:
     <<: [*hosts, *image]
     restart: unless-stopped
-    command: ["python", "-m", "nodetide.verifiers.service", "--host", "0.0.0.0", "--port", "4558"]
+    command: ["/opt/verifier-entrypoint.sh"]
     environment:
       GIT_COMMIT: ${GIT_COMMIT:-unknown}
       NODETIDE_VERIFIER_URL: ${VERIFIER_URL}
@@ -81,9 +78,13 @@ services:
       # SMS codes go through a gateway with a modem (tools/sms-gateway) that fetches them with this token
       NODETIDE_SMS_GATEWAY_TOKEN: ${SMS_GATEWAY_TOKEN:-}
       NODETIDE_PHONE_ALLOWED: ${PHONE_ALLOWED:-}   # empty = the service's default: Bulgarian mobile numbers only
+      # eID notary: reads the person's certificate so nobody else has to; judged against ./anchors (real CA certificates)
+      NODETIDE_EIDAS_REVOCATION: ${EIDAS_REVOCATION:-hard-fail}
+      NODETIDE_EIDAS_NAME_MATCH: ${EIDAS_NAME_MATCH:-transliterated}
     volumes:
       - verifier-data:/data
       - issuer-share:/share
+      - ${ANCHORS_DIR:-./anchors}:/anchors:ro
     ports:
       - "127.0.0.1:${VERIFIER_PORT:-4575}:4558"
     depends_on:

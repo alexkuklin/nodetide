@@ -1,4 +1,4 @@
-"""Standalone claim verification service (email codes, SMS codes through a gateway).
+"""Standalone claim verification service: email codes, SMS codes through a gateway, an eID notary.
 
 An independent party: its own process, its own storage, its own issuer identity. It shares nothing with
 any node. A holder proves control of its identity, the service emails a one-time code, and on success it
@@ -11,6 +11,7 @@ Environment
     NODETIDE_VERIFIER_PUBLISH_ISSUER file to write the issuer's identity hash to, for the operator to pin elsewhere
     NODETIDE_ISSUER_NAME, NODETIDE_SMTP_* , NODETIDE_EMAIL_FROM, NODETIDE_EMAIL_DEV_LOG    email, see verifiers.config
     NODETIDE_SMS_GATEWAY_TOKEN, NODETIDE_PHONE_ALLOWED                                      SMS, see verifiers.config
+    NODETIDE_EIDAS_ANCHORS (+ _REVOCATION, NODETIDE_EIDAS_NAME_MATCH)                         eID notary, see verifiers.config
 
     python -m nodetide.verifiers.service [--host 0.0.0.0] [--port 4558]
 """
@@ -30,7 +31,10 @@ from nodetide.api.auth.challenges import ChallengeStore
 from nodetide.api.auth.native import challenge_handler
 from nodetide.api.verifiers import setup_verifier_routes
 from nodetide.core.storage import Storage
-from nodetide.verifiers.config import VerifierConfigError, build_email_verifier, build_phone_verifier, smtp_configured
+from nodetide.verifiers.config import (
+    VerifierConfigError, build_eid_notary, build_email_verifier, build_phone_verifier, smtp_configured,
+)
+from nodetide.verifiers.eid_notary import EidNotary
 from nodetide.verifiers.email_verifier import CodeVerifier
 from nodetide.verifiers.issuer import NodeIssuer
 from nodetide.verifiers.sms import SmsOutbox
@@ -49,7 +53,7 @@ async def index(request: web.Request) -> web.Response:
         "service": "nodetide-verifier",
         "name": issuer.name,
         "issuer": issuer.identity_hash,
-        "claim_types": list(verifiers),
+        "claim_types": list(verifiers) + (list(request.app["notary"].claim_types) if request.app.get("notary") else []),
         "info": "/api/verify/issuer",
     })
 
@@ -59,6 +63,8 @@ async def _cleanup(app: web.Application) -> None:
         await asyncio.sleep(60)
         for verifier in app["verifiers"].values():
             verifier.cleanup()
+        if app.get("notary") is not None:
+            app["notary"].cleanup()
         app["challenge_store"].cleanup_expired()
         if app.get("sms_outbox") is not None:
             app["sms_outbox"].cleanup()
@@ -80,12 +86,15 @@ def create_verifier_app(
     *,
     outbox: SmsOutbox | None = None,
     gateway_token_digest: bytes | None = None,
+    notary: EidNotary | None = None,
 ) -> web.Application:
-    verifier_list = [verifiers] if isinstance(verifiers, CodeVerifier) else list(verifiers)
+    verifier_list = [verifiers] if isinstance(verifiers, CodeVerifier) else list(verifiers or [])
     app = web.Application()
     app["storage"] = storage
     app["verifiers"] = {v.claim_type: v for v in verifier_list}
-    app["issuer"] = verifier_list[0].issuer
+    app["issuer"] = verifier_list[0].issuer if verifier_list else notary.issuer  # type: ignore[union-attr]
+    if notary is not None:
+        app["notary"] = notary
     app["auth_audience"] = audience.rstrip("/")
     app["challenge_store"] = ChallengeStore()
     if outbox is not None:
@@ -130,16 +139,18 @@ def main() -> None:
         if phone is not None:
             phone_verifier, outbox, digest = phone
             verifiers.append(phone_verifier)
+        notary = build_eid_notary(issuer)
         if not audience:
             raise VerifierConfigError("NODETIDE_VERIFIER_URL (the public address) is required")
-        if not verifiers:
-            raise VerifierConfigError("nothing to verify: set NODETIDE_SMTP_HOST (email) and/or NODETIDE_SMS_GATEWAY_TOKEN (SMS)")
+        if not verifiers and notary is None:
+            raise VerifierConfigError(
+                "nothing to verify: set NODETIDE_SMTP_HOST (email), NODETIDE_SMS_GATEWAY_TOKEN (SMS) and/or NODETIDE_EIDAS_ANCHORS (eID)")
     except VerifierConfigError as e:
         raise SystemExit(f"verifier configuration: {e}") from e
     publish_issuer(issuer, os.environ.get("NODETIDE_VERIFIER_PUBLISH_ISSUER"))
     logger.info("issuer %s (%s), audience %s, verifying: %s", issuer.identity_hash, issuer.name, audience,
-                ", ".join(v.claim_type for v in verifiers))
-    app = create_verifier_app(storage, verifiers, audience, outbox=outbox, gateway_token_digest=digest)
+                ", ".join([v.claim_type for v in verifiers] + (["eID notary"] if notary else [])))
+    app = create_verifier_app(storage, verifiers, audience, outbox=outbox, gateway_token_digest=digest, notary=notary)
     web.run_app(app, host=args.host, port=args.port, print=None)
 
 

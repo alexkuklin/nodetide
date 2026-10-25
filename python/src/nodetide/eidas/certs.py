@@ -7,9 +7,10 @@ signatures created on a qualified signature creation device.
 
 from __future__ import annotations
 
+import re
 import unicodedata
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 
 from asn1crypto import core, x509
 
@@ -199,3 +200,51 @@ def match_legal_name(given: str, family: str, names: CertNames) -> str | None:
     best_first = min(firsts, key=MATCH_STRENGTH.__getitem__)
     best_last = min(lasts, key=MATCH_STRENGTH.__getitem__)
     return max(best_first, best_last, key=MATCH_STRENGTH.__getitem__)
+
+
+# --- date of birth -------------------------------------------------------------------------------------------
+#
+# Only the notary reads this. Two sources, in order: the subject attribute dateOfBirth (RFC 3739), and the
+# Bulgarian personal number (EGN) that qualified certificates carry as serialNumber "PNOBG-<EGN>" (ETSI EN 319 412-1),
+# whose first six digits encode the birth date and whose last digit is a checksum.
+
+DATE_OF_BIRTH_OID = "1.3.6.1.5.5.7.9.1"
+_PNO_BG = re.compile(r"^PNOBG-([0-9]{10})$")
+_EGN_WEIGHTS = (2, 4, 8, 5, 10, 9, 7, 3, 6)
+
+
+def egn_birthdate(egn: str) -> date | None:
+    """The birth date encoded in a valid Bulgarian EGN, else None. Month +20 means 1800s, +40 means 2000s."""
+    if not re.fullmatch(r"[0-9]{10}", egn):
+        return None
+    digits = [int(c) for c in egn]
+    check = sum(w * d for w, d in zip(_EGN_WEIGHTS, digits)) % 11
+    if (check if check < 10 else 0) != digits[9]:
+        return None
+    year, month, day = int(egn[0:2]), int(egn[2:4]), int(egn[4:6])
+    if 21 <= month <= 32:
+        year, month = 1800 + year, month - 20
+    elif 41 <= month <= 52:
+        year, month = 2000 + year, month - 40
+    elif 1 <= month <= 12:
+        year += 1900
+    else:
+        return None
+    try:
+        return date(year, month, day)
+    except ValueError:
+        return None
+
+
+def cert_birthdate(cert: x509.Certificate) -> date | None:
+    """The holder's date of birth if the certificate states it, else None."""
+    try:
+        for rdn in cert.subject.chosen:
+            for attribute in rdn:
+                if attribute["type"].dotted == DATE_OF_BIRTH_OID:
+                    text = core.GeneralizedTime.load(attribute["value"].dump()).native
+                    return text.date() if hasattr(text, "date") else None
+    except (ValueError, TypeError, KeyError):
+        pass
+    match = _PNO_BG.match(str(cert.subject.native.get("serial_number") or ""))
+    return egn_birthdate(match.group(1)) if match else None

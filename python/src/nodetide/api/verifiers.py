@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import hashlib
 import hmac
 import time
@@ -13,22 +15,56 @@ from nodetide.api.auth.challenges import ChallengeStore
 from nodetide.api.claims import error, read_object, resolve_chain
 from nodetide.core.auth import CLOCK_SKEW, verify_assertion
 from nodetide.core.claims import ClaimDocument, ClaimError
+from nodetide.core.identity import Sigchain
+from nodetide.eidas.notary_statement import parse_notary_statement
 from nodetide.core.storage import Storage
 from nodetide.verifiers import CodeVerifier, SmsOutbox, VerificationError
+from nodetide.verifiers.eid_notary import EidNotary
 
 PURPOSE = "claim_verification"
+EID_PURPOSE = "eid_attestation"
+MAX_SIGNATURE_B64 = 256 * 1024 * 4 // 3 + 8
 
 
 def _verifier(request: web.Request) -> CodeVerifier | None:
     return request.app.get("verifiers", {}).get(request.match_info.get("kind", ""))
 
 
+async def _authenticate(request: web.Request, data: dict, identity: str) -> tuple[Sigchain, dict] | web.Response:
+    """Prove the caller controls a key of `identity` for THIS service: returns (chain, signed claims) or an error."""
+    audience = request.app.get("auth_audience")
+    storage: Storage = request.app["storage"]
+    challenges: ChallengeStore = request.app["challenge_store"]
+    assertion = data.get("assertion")
+    if not isinstance(assertion, dict) or not isinstance(assertion.get("nonce"), str):
+        return error("invalid_request", "An assertion with a nonce is required", 400)
+    if assertion.get("identity") != identity:
+        return error("invalid_request", "The assertion is for a different identity", 400)
+    challenge = challenges.peek(assertion["nonce"])
+    if challenge is None:
+        return error("unknown_challenge", "Challenge is unknown, already used, or expired", 401)
+    if challenge.aud != audience:
+        return error("wrong_audience", "Challenge was not issued for this service", 401)
+    chain, err = resolve_chain(storage, identity, data.get("sigchain"))
+    if err is not None:
+        return err
+    result = verify_assertion(assertion, chain, expected_aud=audience)
+    if result.ok and assertion["exp"] > challenge.expires_at + CLOCK_SKEW:
+        return error("invalid_assertion", "Assertion outlives its challenge", 401)
+    if not result.ok:
+        if result.code == "unknown_chain_head":
+            return error("stale_state", result.error or "Stale sigchain", 409, {"head_hash": chain.head_hash})
+        return error(result.code or "invalid_assertion", result.error or "Invalid assertion", 401)
+    return chain, result.claims
+
+
 async def issuer_info(request: web.Request) -> web.Response:
     """GET /verify/issuer - who issues attestations here, and for which claims."""
     verifiers: dict[str, CodeVerifier] = request.app.get("verifiers", {})
-    if not verifiers:
+    notary: EidNotary | None = request.app.get("notary")
+    if not verifiers and notary is None:
         return error("not_configured", "This service does not verify claims", 404)
-    issuer = next(iter(verifiers.values())).issuer
+    issuer = request.app["issuer"]
     return web.json_response({
         "issuer": issuer.identity_hash,
         "name": issuer.name,
@@ -41,7 +77,7 @@ async def issuer_info(request: web.Request) -> web.Response:
             "assurance": v.assurance,
             "start": f"/api/verify/{kind}/start",
             "confirm": f"/api/verify/{kind}/confirm",
-        } for kind, v in verifiers.items()],
+        } for kind, v in verifiers.items()] + ([notary.describe()] if notary is not None else []),
     })
 
 
@@ -57,7 +93,6 @@ async def start(request: web.Request) -> web.Response:
     if verifier is None or not audience:
         return error("not_configured", "This kind of verification is not enabled", 404)
 
-    storage: Storage = request.app["storage"]
     challenges: ChallengeStore = request.app["challenge_store"]
     data = await read_object(request)
     if isinstance(data, web.Response):
@@ -67,32 +102,13 @@ async def start(request: web.Request) -> web.Response:
         document = ClaimDocument.from_dict(data.get("document"))
     except ClaimError as e:
         return error("invalid_request", str(e), 400)
-    assertion = data.get("assertion")
-    if not isinstance(assertion, dict) or not isinstance(assertion.get("nonce"), str):
-        return error("invalid_request", "An assertion with a nonce is required", 400)
-    if assertion.get("identity") != document.identity:
-        return error("invalid_request", "The assertion is for a different identity", 400)
-
-    challenge = challenges.peek(assertion["nonce"])
-    if challenge is None:
-        return error("unknown_challenge", "Challenge is unknown, already used, or expired", 401)
-    if challenge.aud != audience:
-        return error("wrong_audience", "Challenge was not issued for this service", 401)
-
-    chain, err = resolve_chain(storage, document.identity, data.get("sigchain"))
-    if err is not None:
-        return err
-
-    result = verify_assertion(assertion, chain, expected_aud=audience)
-    if result.ok and assertion["exp"] > challenge.expires_at + CLOCK_SKEW:
-        return error("invalid_assertion", "Assertion outlives its challenge", 401)
-    if not result.ok:
-        if result.code == "unknown_chain_head":
-            return error("stale_state", result.error or "Stale sigchain", 409, {"head_hash": chain.head_hash})
-        return error(result.code or "invalid_assertion", result.error or "Invalid assertion", 401)
-    if result.claims.get("purpose") != PURPOSE or result.claims.get("claim_id") != document.claim_id:
+    authenticated = await _authenticate(request, data, document.identity)
+    if isinstance(authenticated, web.Response):
+        return authenticated
+    chain, signed = authenticated
+    if signed.get("purpose") != PURPOSE or signed.get("claim_id") != document.claim_id:
         return error("assertion_not_bound", "The assertion must be signed for this claim's verification", 401)
-    if not challenges.consume(assertion["nonce"]):
+    if not challenges.consume(data["assertion"]["nonce"]):
         return error("unknown_challenge", "Challenge is unknown, already used, or expired", 401)
 
     try:
@@ -105,6 +121,49 @@ async def start(request: web.Request) -> web.Response:
         "message": "A verification code was sent." if verifier.claim_type == "email"
         else "A verification code was queued for SMS.",
     }, status=202)
+
+
+async def eid_attest(request: web.Request) -> web.Response:
+    """POST /verify/eid/attest - the eID notary.
+
+    {"statement": "<notary statement text>", "signature": "<base64 detached CAdES>",
+     "documents": [{claim document}, ...], "assertion": {...}, "sigchain": [...]?}
+
+    The assertion's signed claims MUST be {"purpose": "eid_attestation", "statement_sha256": "<sha256 hex of the
+    statement text>"}: the request comes from a key of the identity, for exactly this statement. The signature embeds
+    the certificate; it goes to this service only, is used for this request and is not kept.
+    """
+    notary: EidNotary | None = request.app.get("notary")
+    if notary is None or not request.app.get("auth_audience"):
+        return error("not_configured", "eID attestation is not enabled", 404)
+    data = await read_object(request)
+    if isinstance(data, web.Response):
+        return data
+    statement, signature, documents = data.get("statement"), data.get("signature"), data.get("documents")
+    if not isinstance(statement, str) or not isinstance(signature, str) or not isinstance(documents, list) or len(documents) > 5:
+        return error("invalid_request", "statement, signature and documents are required", 400)
+    if len(signature) > MAX_SIGNATURE_B64:
+        return error("invalid_request", "The signature is too large", 400)
+    try:
+        der = base64.b64decode(signature, validate=True)
+        docs = [ClaimDocument.from_dict(d) for d in documents]
+        identity = parse_notary_statement(statement).identity
+    except (binascii.Error, ValueError, ClaimError) as e:
+        return error("invalid_request", str(e), 400)
+
+    authenticated = await _authenticate(request, data, identity)
+    if isinstance(authenticated, web.Response):
+        return authenticated
+    chain, signed = authenticated
+    if signed.get("purpose") != EID_PURPOSE or signed.get("statement_sha256") != hashlib.sha256(statement.encode()).hexdigest():
+        return error("assertion_not_bound", "The assertion must be signed for exactly this statement", 401)
+    if not request.app["challenge_store"].consume(data["assertion"]["nonce"]):
+        return error("unknown_challenge", "Challenge is unknown, already used, or expired", 401)
+    try:
+        attestations = await notary.attest(statement, der, docs, chain)
+    except VerificationError as e:
+        return error(e.code, e.message, e.status)
+    return web.json_response({"attestations": [a.to_dict() for a in attestations]}, status=201)
 
 
 async def confirm(request: web.Request) -> web.Response:
@@ -204,6 +263,7 @@ async def gateway_result(request: web.Request) -> web.Response:
 
 def setup_verifier_routes(app: web.Application) -> None:
     app.router.add_get("/api/verify/issuer", issuer_info)
+    app.router.add_post("/api/verify/eid/attest", eid_attest)
     app.router.add_post("/api/verify/{kind}/start", start)
     app.router.add_post("/api/verify/{kind}/confirm", confirm)
     app.router.add_get("/api/verify/{kind}/{verification_id}/status", delivery_status)

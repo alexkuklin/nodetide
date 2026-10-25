@@ -362,20 +362,28 @@ def eid_sign(claim_id: str, module: str | None, slot: int | None, cert_index: in
 def eid_sign_file(statement_file: str, module: str | None, slot: int | None, cert_index: int | None, out: str | None):
     """Sign a claim statement made elsewhere (for example by a wallet service) with your token.
 
-    Only a canonical Nodetide claim statement is signed; anything else is refused. The result is
-    a detached CAdES signature (.p7s) to hand back to whoever made the statement.
+    Only a canonical Nodetide statement is signed (a single-claim statement, or a notary statement that
+    lists the claims one named notary may attest); anything else is refused. The statement is shown before
+    you are asked for the PIN. The result is a detached CAdES signature (.p7s) to hand back to whoever made
+    the statement. For a notary statement it contains your certificate, so send it only to that notary.
     """
     from datetime import datetime, timezone
 
     from nodetide.eidas.cms import create_cades_detached
     from nodetide.eidas.pkcs11 import Pkcs11Error, Pkcs11Token, find_module
+    from nodetide.eidas.notary_statement import parse_notary_statement
     from nodetide.eidas.statement import StatementError, parse_statement
 
     try:
         text = Path(statement_file).read_bytes().decode("utf-8")
-        statement = parse_statement(text)
+        try:
+            statement = parse_notary_statement(text)
+        except StatementError:
+            statement = parse_statement(text)
     except (UnicodeDecodeError, StatementError) as e:
-        raise click.ClickException(f"Refusing to sign this file: it is not a Nodetide claim statement ({e})") from None
+        raise click.ClickException(f"Refusing to sign this file: it is not a Nodetide statement ({e})") from None
+    click.echo("You are about to sign exactly this:\n")
+    click.echo("    " + text.replace("\n", "\n    ") + "\n")
     now = int(time.time())
     if not now - 600 <= statement.signed_on <= now + 600:
         raise click.ClickException("The statement's 'Signed on' time is not close to now; ask for a fresh statement")

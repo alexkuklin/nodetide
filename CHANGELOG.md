@@ -3,6 +3,38 @@
 Progress notes kept between sessions. Newest first. Each entry says what changed, why, and what is
 still open, so a new session can pick up without re-deriving context.
 
+## 2026-10-25 (privacy) - eID notary: attest from a government signature without exposing it
+
+### Added
+- **`eidas_notary`**: the verification service validates a CAdES signature from the person's eID card and issues ordinary
+  attestations; the certificate (with the personal number) goes to that one party. `POST /api/verify/eid/attest`.
+  - **Notary statement** (`eidas/notary_statement.py`): canonical text naming the identity, the notary's identity hash, a chain head,
+    a validity window and one `Claim:` line per claim to attest (max 5, `legal_name | birthdate | age_over_18`). The request is bound
+    to it (`AuthAssertion` with the statement's sha256), so a leaked file is useless to another notary and the holder decides what is attested.
+  - **`EidNotary`** (`verifiers/eid_notary.py`): checks signature, certificate chain (own trust anchors, revocation), freshness, then each
+    claim against the certificate; refuses on mismatch; one attestation per listed claim with `evidence {source, qscd}`, no certificate,
+    no number. Certificate is never stored or logged (a test checks the log).
+  - **New claim types** `birthdate` (ISO date) and `age_over_18` (`true`), so a person can prove adulthood without a birth date. Birth date
+    comes from the certificate's `dateOfBirth` attribute or a Bulgarian `PNOBG-` EGN (checksum verified, century by month offset).
+- **Bridge**: `NODETIDE_OIDC_NOTARY_ISSUERS` (pin for the eID-derived claims, high assurance); scopes `birthdate` and `age_over_18`, released as
+  standard `birthdate` / `age_over_18` plus `verified_claims` entries; `eidas_notary` counts as the `eidas` trust framework.
+- **Wallet**: tick the claims to attest, get one statement, upload the signature (sent to the notary, never stored), keep attestations only.
+  `nodetide eid sign-file` accepts notary statements and prints what it signs before the PIN prompt.
+- **Test stack**: trust anchors and revocation settings moved from the node to the verifier; the node no longer mounts anchors or sees a
+  certificate and pins the verifier for email, phone and notary claims. Smoke test (synthetic CA, EGN-bearing certificate) passes: only listed
+  claims attested, nothing personal in attestations or logs, bridge releases the verified name, birth date and age stay unreleased unless asked.
+  441 tests.
+
+### Planned (written down in `identity-system.md`, not testable yet)
+- EU Digital Identity Wallet credentials (PID) with SD-JWT VC / mdoc selective disclosure over OpenID4VP as another method with the issuing
+  state as trust anchor; depends on Bulgaria's wallet timing (unknown).
+- Zero-knowledge proofs over a qualified signature (research).
+
+### Open
+- Real card + real Borica CA anchors still untried: needs the PIN and the CA certificates. The deployed server has no anchors, so its notary is off.
+- The direct `eidas_qes` proof path (bridge sees the certificate) still exists as a library option but the stack no longer uses it.
+- Birth date extraction covers Bulgarian EGN and the `dateOfBirth` attribute only.
+
 ## 2026-10-25 (verification) - SMS codes through a modem gateway
 
 ### Added

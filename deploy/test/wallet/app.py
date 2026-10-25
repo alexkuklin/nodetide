@@ -1,8 +1,10 @@
 """Test wallet: stands in for the Nodetide app that does not exist yet.
 
 It holds one development identity (keys in plain JSON in its volume: never put anything real
-here), makes claims, gets them attested (email by an independent verification service that mails a code, legal name
-through a statement you sign with your own eID card), and approves OIDC sign-ins while choosing
+here), makes claims, and gets them attested by the independent verification service: email and
+phone with a one-time code, legal name / birth date / "over 18" by that service acting as an eID
+notary on a statement you sign with your own eID card (the signature, which contains your
+certificate, goes to the notary only and is not kept). It approves OIDC sign-ins while choosing
 which claims to reveal. Everything is behind HTTP basic auth.
 
 Every action is a JSON endpoint under /api (send `Accept: application/json`); the HTML forms
@@ -12,6 +14,8 @@ post to the same endpoints and are redirected back to the dashboard.
 from __future__ import annotations
 
 import asyncio
+import base64
+import hashlib
 import hmac
 import html
 import json
@@ -30,9 +34,7 @@ from nodetide.core.auth import create_assertion
 from nodetide.core.claims import Attestation, ClaimDocument, ClaimError
 from nodetide.core.crypto import KeyPair
 from nodetide.core.identity import DeviceCapability, Identity, Sigchain
-from nodetide.eidas.cms import CmsError
-from nodetide.eidas.issue import attestation_from_signature
-from nodetide.eidas.statement import StatementError, build_statement
+from nodetide.eidas.notary_statement import NOTARIZABLE, build_notary_statement
 
 log = logging.getLogger("wallet")
 
@@ -210,35 +212,65 @@ async def confirm_email(claim_id: str, code: str) -> dict[str, Any]:
 # --- statements and signatures ---------------------------------------------------------------------------
 
 
-def new_statement(claim_id: str) -> str:
+async def notary_info() -> dict[str, Any]:
+    """Who the eID notary is (the verification service's identity) and what it can attest."""
+    status, info = await verifier("GET", "/api/verify/issuer")
+    method = next((m for m in info.get("methods", []) if m.get("method") == "eidas_notary"), None) if status == 200 else None
+    if method is None:
+        raise WalletError("the verification service does not attest eID signatures", 501)
+    return {"issuer": info["issuer"], "name": info.get("name") or info["issuer"][:12], "sigchain": info["sigchain"],
+            "claim_types": method["claim_types"]}
+
+
+async def new_notary_statement(claim_ids: list[str]) -> str:
+    """The statement to sign with the card: it names the notary and lists exactly the claims to attest."""
+    info = await notary_info()
     identity, now = wallet.identity, int(time.time())
-    record = identity.sigchain.get_claim(claim_id)
-    if record is None or record.claim_type != "legal_name":
-        raise WalletError("statements are for legal_name claims")
-    text = build_statement(identity.identity_hash or "", record.claim_id, record.claim_type, record.commitment,
-                           identity.sigchain.head_hash or "", now, now + STATEMENT_DAYS * 86400)
-    wallet.state["statements"][claim_id] = text
+    claims = []
+    for claim_id in claim_ids:
+        record = identity.sigchain.get_claim(claim_id)
+        if record is None or record.claim_type not in info["claim_types"]:
+            raise WalletError("only legal name, birth date and over-18 claims can be attested from an eID signature")
+        claims.append((record.claim_id, record.claim_type, record.commitment))
+    if not claims:
+        raise WalletError("tick at least one claim")
+    try:
+        text = build_notary_statement(identity.identity_hash or "", info["issuer"], identity.sigchain.head_hash or "",
+                                      now, now + STATEMENT_DAYS * 86400, claims)
+    except ValueError as e:
+        raise WalletError(str(e)) from None
+    wallet.state["notary_statement"] = {"text": text, "claim_ids": claim_ids}
     wallet.save()
     return text
 
 
-async def attach_signature(claim_id: str, der: bytes) -> dict[str, Any]:
-    text = wallet.state["statements"].get(claim_id)
-    if not text:
+async def submit_signature(der: bytes) -> list[dict[str, Any]]:
+    """Send the card's signature (it embeds the certificate, so the ID number) to the notary and nowhere else.
+
+    The signature is not stored here; what comes back are attestations without it.
+    """
+    pending = wallet.state.get("notary_statement")
+    if not pending:
         raise WalletError("create a statement first")
-    identity, document = wallet.identity, wallet.document(claim_id)
-    try:
-        attestation = attestation_from_signature(identity.sigchain, identity.sigchain.get_claim(claim_id), text, der)
-    except (CmsError, StatementError) as e:
-        raise WalletError(f"cannot use this signature: {e}") from None
-    # ask the node, as any relying party would, whether it believes it
-    status, verdict = await node("POST", "/api/claims/verify", json={
-        "attestation": attestation.to_dict(), "document": document.to_dict(),
-        "subject_sigchain": identity.sigchain.to_list(), "name_match": "approximate"})
-    summary = ("accepted by the node" + (f" (name match: {verdict.get('name_match')})" if verdict.get("name_match") else "")
-               if verdict.get("valid") else f"node says: {verdict.get('code')}: {verdict.get('error')}")
-    wallet.add_attestation(attestation.to_dict(), summary)
-    return {"attestation_id": attestation.id, "node_verdict": summary, "valid": bool(verdict.get("valid"))}
+    info = await notary_info()
+    identity, text = wallet.identity, pending["text"]
+    status, request = await verifier("POST", "/api/auth/challenge", json={})
+    if status != 201:
+        raise WalletError(f"the notary refused a challenge: {request}", 502)
+    assertion = create_assertion(request, identity.identity_hash or "", wallet.device, identity.sigchain.head_hash or "",
+                                 claims={"purpose": "eid_attestation", "statement_sha256": hashlib.sha256(text.encode()).hexdigest()})
+    status, body = await verifier("POST", "/api/verify/eid/attest", json={
+        "statement": text, "signature": base64.b64encode(der).decode("ascii"),
+        "documents": [wallet.document(c).to_dict() for c in pending["claim_ids"]],
+        "assertion": assertion, "sigchain": identity.sigchain.to_list()})
+    if status != 201:
+        raise WalletError(f"the notary said: {body.get('message', body)}", 400 if status < 500 else 502)
+    wallet.state.setdefault("issuer_chains", {})[info["issuer"]] = info["sigchain"]
+    for attestation in body["attestations"]:
+        wallet.add_attestation(attestation, f"attested by {info['name']} (eID notary)")
+    wallet.state.pop("notary_statement", None)
+    wallet.save()
+    return body["attestations"]
 
 
 # --- sign-in -------------------------------------------------------------------------------------------------
@@ -377,7 +409,7 @@ def state_view() -> dict[str, Any]:
                 for a in wallet.state["attestations"] if a["claim_id"] == record.claim_id]
         claims.append({"claim_id": record.claim_id, "claim_type": record.claim_type, "status": record.status(now),
                        "value": doc.value if doc else None, "attestations": atts,
-                       "has_statement": record.claim_id in wallet.state["statements"]})
+                       })
     return {"identity": identity.identity_hash, "claims": claims}
 
 
@@ -419,21 +451,20 @@ async def api_confirm_email(request: web.Request) -> web.Response:
     return done(request, {"attestation": attestation}, "Verified.")
 
 
-async def api_statement(request: web.Request) -> web.Response:
-    claim_id = request.match_info["id"]
+async def api_eid_statement(request: web.Request) -> web.Response:
     if request.method == "POST":
-        text = new_statement(claim_id)
-        return done(request, {"statement": text, "valid_for": f"sign within 10 minutes; valid {STATEMENT_DAYS} days"},
-                    "statement created: download it and sign it with your card within 10 minutes")
-    text = wallet.state["statements"].get(claim_id)
-    if not text:
+        data = await params(request)
+        claim_ids = data.get("claims") if isinstance(data.get("claims"), list) else data.get("_multi", {}).get("claim", [])
+        text = await new_notary_statement([str(c) for c in claim_ids])
+        return done(request, {"statement": text}, "Statement created: download it and sign it with your card within 10 minutes.")
+    pending = wallet.state.get("notary_statement")
+    if not pending:
         raise WalletError("no statement yet", 404)
-    return web.Response(body=text.encode("utf-8"), content_type="text/plain",
-                        headers={"Content-Disposition": f'attachment; filename="statement-{claim_id[:8]}.txt"'})
+    return web.Response(body=pending["text"].encode("utf-8"), content_type="text/plain",
+                        headers={"Content-Disposition": 'attachment; filename="notary-statement.txt"'})
 
 
-async def api_signature(request: web.Request) -> web.Response:
-    claim_id = request.match_info["id"]
+async def api_eid_signature(request: web.Request) -> web.Response:
     if request.content_type == "multipart/form-data":
         reader = await request.multipart()
         der = b""
@@ -444,8 +475,22 @@ async def api_signature(request: web.Request) -> web.Response:
         der = await request.read()
     if not der:
         raise WalletError("no signature received")
-    result = await attach_signature(claim_id, der)
-    return done(request, result, result["node_verdict"])
+    attestations = await submit_signature(der)
+    types = ", ".join(sorted(a["claim_type"] for a in attestations))
+    return done(request, {"attestations": attestations}, f"The notary attested: {types}. Your certificate was not kept.")
+
+
+async def api_claim_birthdate(request: web.Request) -> web.Response:
+    data = await params(request)
+    document = wallet.add_claim("birthdate", str(data.get("date", "")))
+    await publish()
+    return done(request, {"claim_id": document.claim_id}, "birth date claim created")
+
+
+async def api_claim_age(request: web.Request) -> web.Response:
+    document = wallet.add_claim("age_over_18", True)
+    await publish()
+    return done(request, {"claim_id": document.claim_id}, "over-18 claim created")
 
 
 async def api_signin_preview(request: web.Request) -> web.Response:
@@ -511,6 +556,30 @@ async def signin_link(request: web.Request) -> web.Response:
     return web.Response(text=signin_page(await signin_preview(link)), content_type="text/html")
 
 
+def eid_form(view: dict[str, Any]) -> str:
+    eligible = [c for c in view["claims"] if c["claim_type"] in NOTARIZABLE]
+    if not eligible:
+        return ('<h2>Prove claims with your eID card</h2><p class="muted">Add a legal name, birth date or over-18 claim '
+                'first; then you can have them attested from your eID signature.</p>')
+    boxes = "".join(
+        f'<label><input type="checkbox" name="claim" value="{esc(c["claim_id"])}"> {esc(c["claim_type"])}: '
+        f'{esc(json.dumps(c["value"], ensure_ascii=False))}</label><br>' for c in eligible)
+    pending = wallet.state.get("notary_statement")
+    step2 = ""
+    if pending:
+        step2 = ('<p><b>Statement ready.</b> <a href="/api/eid/statement">download it</a>, sign it with your card '
+                 '(<code>nodetide eid sign-file notary-statement.txt</code>, within 10 minutes), then upload the .p7s. '
+                 'It goes to the notary only and is not kept here.</p>'
+                 '<form method="post" action="/api/eid/signature" enctype="multipart/form-data">'
+                 '<input type="file" name="signature" required> <button>Send to the notary</button></form>'
+                 f'<pre class="muted">{esc(pending["text"])}</pre>')
+    return f"""<h2>Prove claims with your eID card</h2>
+<p>Tick what the notary should attest. Only these claims are attested, each as a separate attestation that holds neither
+your certificate nor your personal number. The signature you create contains your certificate: it goes to the notary
+({esc(VERIFIER_URL)}) and nowhere else.</p>
+<form method="post" action="/api/eid/statement">{boxes}<button>Create the statement to sign</button></form>{step2}"""
+
+
 async def delivery_state(claim_id: str) -> str:
     """Where the code is: for SMS it may still be in the gateway's queue, or have been refused."""
     pending = wallet.state.get("verifications", {}).get(claim_id)
@@ -548,22 +617,23 @@ async def dashboard(request: web.Request) -> web.Response:
                             f'<input name="code" required maxlength="16" autocomplete="off" size="12"> <button>Confirm</button></form>'
                             + (f'<div class="muted">{esc(note)}</div>' if note else ""))
         else:
-            download = f' <a href="/api/claims/{cid}/statement">download statement</a>' if c["has_statement"] else ""
-            actions = (f'<form method="post" action="/api/claims/{cid}/statement"><button>Create statement to sign</button>{download}</form>'
-                       f'<form method="post" action="/api/claims/{cid}/signature" enctype="multipart/form-data">'
-                       f'<input type="file" name="signature" required> <button>Upload signature (.p7s)</button></form>')
+            actions = '<span class="muted">see "Prove claims with your eID card" below</span>' if c["claim_type"] in NOTARIZABLE else ""
         rows.append(f"<tr><td>{esc(c['claim_type'])}<br><code>{cid[:8]}</code></td><td>{esc(c['status'])}</td>"
                     f"<td>{esc(shown)}</td><td>{atts}</td><td>{actions}</td></tr>")
     table = ("<table><tr><th>claim</th><th>status</th><th>value (private)</th><th>attestations</th><th></th></tr>"
              + "".join(rows) + "</table>") if rows else '<p class="muted">No claims yet.</p>'
     explorer = f"{NODE_URL}/explorer/#/identity/{identity}"
+    eid_section = eid_form(view)
     body = f"""<p>Test identity: <code>{esc(identity)}</code> (<a href="{esc(explorer)}">see it in the explorer</a>)</p>
 <h2>Claims</h2>{table}
 <h3>Add a claim</h3>
 <form method="post" action="/api/claims/email">Email: <input type="email" name="address" required> <button>Add</button></form>
+<form method="post" action="/api/claims/birthdate">Birth date: <input type="date" name="date" required> <button>Add</button></form>
+<form method="post" action="/api/claims/age"><button>Add an "I am over 18" claim</button> <span class="muted">(prove your age without your birth date)</span></form>
 <form method="post" action="/api/claims/phone">Phone (international format): <input type="text" name="number" required placeholder="+359..."> <button>Add</button></form>
 <form method="post" action="/api/claims/name">Legal name as on your certificate:
 <input type="text" name="given" placeholder="given name" required> <input type="text" name="family" placeholder="family name" required> <button>Add</button></form>
+{eid_section}
 <h2>Approve a sign-in</h2>
 <form method="post" action="/api/signin/preview">Sign-in address from the application:
 <input type="url" name="login_url" required placeholder="{esc(NODE_URL)}/oidc/login/..."> <button>Look at it</button></form>
@@ -587,8 +657,10 @@ def build_app() -> web.Application:
     app.router.add_post("/api/claims/name", api_claim_name)
     app.router.add_post("/api/claims/{id}/verify-email", api_verify_email)
     app.router.add_post("/api/claims/{id}/confirm-email", api_confirm_email)
-    app.router.add_route("*", "/api/claims/{id}/statement", api_statement)
-    app.router.add_post("/api/claims/{id}/signature", api_signature)
+    app.router.add_route("*", "/api/eid/statement", api_eid_statement)
+    app.router.add_post("/api/eid/signature", api_eid_signature)
+    app.router.add_post("/api/claims/birthdate", api_claim_birthdate)
+    app.router.add_post("/api/claims/age", api_claim_age)
     app.router.add_post("/api/signin/preview", api_signin_preview)
     app.router.add_post("/api/signin/approve", api_signin_approve)
 
