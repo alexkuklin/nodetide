@@ -659,3 +659,22 @@ def test_clients_file_validation(tmp_path):
     with pytest.raises(ConfigError):
         load([{"client_id": "a", "redirect_uris": ["https://a.example.com/cb"]},
               {"client_id": "a", "redirect_uris": ["https://b.example.com/cb"]}])
+
+
+def test_plain_http_is_only_accepted_when_explicitly_allowed(tmp_path, monkeypatch):
+    with pytest.raises(ConfigError):
+        OIDCConfig(issuer="http://bridge.example.com", clients={})
+    assert OIDCConfig(issuer="http://bridge.example.com", clients={}, allow_insecure=True).issuer == "http://bridge.example.com"
+
+    clients = tmp_path / "clients.json"
+    clients.write_text(json.dumps([{"client_id": "a", "redirect_uris": ["http://rp.example.com/cb"]}]))
+    with pytest.raises(ConfigError):
+        OIDCConfig.load_clients(clients)
+    assert "a" in OIDCConfig.load_clients(clients, allow_insecure=True)
+
+    monkeypatch.setenv("NODETIDE_OIDC_ISSUER", "http://bridge.example.com")
+    monkeypatch.setenv("NODETIDE_OIDC_CLIENTS_FILE", str(clients))
+    with pytest.raises(ConfigError):
+        OIDCConfig.from_env()
+    monkeypatch.setenv("NODETIDE_OIDC_ALLOW_INSECURE", "1")
+    assert OIDCConfig.from_env().allow_insecure

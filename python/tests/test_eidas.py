@@ -567,3 +567,14 @@ def test_anchors_are_written_as_pem_named_by_fingerprint(tmp_path):
     (path,) = write_anchors([root.asn1], tmp_path / "anchors")
     assert path.name == fingerprint(root.asn1)[:16] + ".pem"
     assert len(TrustStore.from_directory(tmp_path / "anchors").anchors) == 1
+
+
+def test_signer_certificates_can_be_read_from_a_bare_signature(w):
+    from nodetide.eidas.cms import signer_certificates
+
+    der = create_cades_detached(b"anything", w.signer)
+    signer, others = signer_certificates(der)
+    assert signer.serial_number == w.leaf.cert.serial_number
+    assert [c.subject.native["common_name"] for c in others] == ["Test Qualified CA"]
+    with pytest.raises(CmsError):
+        signer_certificates(b"not a signature")

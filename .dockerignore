@@ -1,0 +1,13 @@
+# Keep the build context small and never send secrets into it.
+.git
+.github
+.testkit
+android
+testkit
+**/__pycache__
+**/*.pyc
+**/node_modules
+deploy/test/.env
+deploy/test/config
+deploy/test/.smoke
+deploy/test/anchors

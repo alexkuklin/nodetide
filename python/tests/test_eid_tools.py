@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 
 import pytest
 from click.testing import CliRunner
@@ -583,3 +584,64 @@ def test_nodetide_home_redirects_the_cli_data_directory(tmp_path, monkeypatch):
     run("claim", "add", "--type", "email", "--email", "a@example.com")
     assert (elsewhere / "nodetide.db").exists() and list((elsewhere / "claims").glob("*.json"))
     assert not (tmp_path / "real-home" / ".nodetide").exists()  # the real data directory was never touched
+
+
+def make_statement_file(tmp_path, world, **over):
+    from nodetide.eidas import statement as st
+
+    now = int(time.time())
+    fields = dict(identity="a" * 64, claim_id="claim-id-0123456789", claim_type="legal_name", commitment="b" * 64,
+                  chain_head="c" * 64, signed_on=now, valid_until=now + 86400)
+    fields.update(over)
+    path = tmp_path / "statement.txt"
+    path.write_bytes(st.build_statement(**fields).encode())
+    return path
+
+
+def test_sign_file_signs_a_canonical_statement_and_nothing_else(home, tmp_path, monkeypatch):
+    world, pk11, module = cli_card(monkeypatch, tmp_path)
+    statement = make_statement_file(tmp_path, world)
+    out = tmp_path / "statement.p7s"
+
+    result = run("eid", "sign-file", str(statement), "--module", module, "--slot", "16", "--out", str(out),
+                 input=f"y\n{SIGN_PIN}\n{SIGN_PIN}\n")
+    assert result.exit_code == 0, result.output
+    assert SIGN_PIN not in result.output and oct(out.stat().st_mode & 0o777) == "0o600"
+    parsed = verify_cades_detached(out.read_bytes(), statement.read_bytes())  # covers exactly the file's bytes
+    assert parsed.signer_cert.serial_number == world.leaf.cert.serial_number
+
+    # arbitrary text, an altered statement, or a stale one are refused before any PIN is tried
+    pk11.pins_tried.clear()
+    other = tmp_path / "other.txt"
+    other.write_text("please sign this contract")
+    for bad in (other, make_statement_file(tmp_path, world, signed_on=int(time.time()) - 7200, valid_until=int(time.time()) + 100)):
+        refused = run("eid", "sign-file", str(bad), "--module", module, "--slot", "16", input="y\n")
+        assert refused.exit_code != 0 and pk11.pins_tried == []
+    assert "not a Nodetide claim statement" in run("eid", "sign-file", str(other), "--module", module).output
+
+
+def test_sign_file_refuses_a_statement_that_outlives_the_certificate(home, tmp_path, monkeypatch):
+    world, pk11, module = cli_card(monkeypatch, tmp_path)
+    far = int(time.time()) + 10 * 365 * 86400
+    result = run("eid", "sign-file", str(make_statement_file(tmp_path, world, valid_until=far)), "--module", module)
+    assert result.exit_code != 0 and "longer than your certificate" in result.output and pk11.pins_tried == []
+
+
+def test_eid_anchors_reads_a_bare_signature_and_saves_only_after_confirmation(home, tmp_path, monkeypatch):
+    world = World()
+    der = create_cades_detached(b"x", world.signer)
+    signature = tmp_path / "s.p7s"
+    signature.write_bytes(der)
+    out = tmp_path / "anchors"
+
+    declined = run("eid", "anchors", str(signature), "--out", str(out), input="n\n")
+    assert declined.exit_code != 0 and not out.exists() and "sha256" in declined.output
+
+    # the intermediate is inside the signature; the root is found through the AIA-less chain end
+    accepted = run("eid", "anchors", str(signature), "--out", str(out), input="y\n")
+    assert accepted.exit_code == 0 and "saved" in accepted.output and list(out.glob("*.pem"))
+    assert "Test Qualified CA" in accepted.output
+
+    garbage = tmp_path / "junk.bin"
+    garbage.write_bytes(b"\x00\x01\x02")
+    assert run("eid", "anchors", str(garbage), "--out", str(out)).exit_code != 0

@@ -5,6 +5,7 @@ Environment:
     NODETIDE_OIDC_CLIENTS_FILE     JSON file listing registered relying parties
     NODETIDE_OIDC_KEY_FILE         RSA signing key (PEM); created if missing
     NODETIDE_SEED_NODES            comma-separated node URLs to ask for unknown identities
+    NODETIDE_OIDC_ALLOW_INSECURE   "1" to accept http:// issuer and redirect URIs (local testing only)
     NODETIDE_FETCH_ALLOW_PRIVATE   "1" to let the fetcher contact private/loopback addresses
     NODETIDE_OIDC_TRUSTED_ISSUERS  comma-separated identity hashes trusted to attest email/phone/legal_name
     NODETIDE_OIDC_NAME_MATCH       exact|transliterated|approximate: how loosely a legal name may match an eID certificate
@@ -32,12 +33,14 @@ class ConfigError(ValueError):
     """Invalid OIDC bridge configuration."""
 
 
-def _is_secure_url(url: str) -> bool:
-    """https, or http on a loopback host (development)."""
+def _is_secure_url(url: str, allow_insecure: bool = False) -> bool:
+    """https, or http on a loopback host (development). allow_insecure accepts any http(s) URL."""
     parts = urlsplit(url)
     if not parts.hostname:
         return False
     if parts.scheme == "https":
+        return True
+    if parts.scheme == "http" and allow_insecure:
         return True
     return parts.scheme == "http" and parts.hostname in LOOPBACK_HOSTS
 
@@ -74,6 +77,7 @@ class OIDCConfig:
     allow_private_fetch: bool = False
     trusted_issuers: list[str] = field(default_factory=list)  # extra attestation issuers to accept
     name_match: str = "transliterated"
+    allow_insecure: bool = False  # http:// issuer and redirect URIs: local testing only
     claim_rules: dict = field(default_factory=dict)  # explicit ClaimRule overrides by claim type
     attempt_lifetime: int = 900  # how long a sign-in page stays usable
     code_lifetime: int = 120
@@ -82,7 +86,7 @@ class OIDCConfig:
 
     def __post_init__(self) -> None:
         self.issuer = self.issuer.rstrip("/")
-        if not _is_secure_url(self.issuer):
+        if not _is_secure_url(self.issuer, self.allow_insecure):
             raise ConfigError("issuer must be an https URL (or http on localhost)")
         parts = urlsplit(self.issuer)
         if parts.query or parts.fragment:
@@ -94,7 +98,7 @@ class OIDCConfig:
             raise ConfigError("name_match must be exact, transliterated or approximate")
 
     @classmethod
-    def load_clients(cls, path: str | Path) -> dict[str, OIDCClient]:
+    def load_clients(cls, path: str | Path, allow_insecure: bool = False) -> dict[str, OIDCClient]:
         try:
             raw = json.loads(Path(path).read_text())
         except (OSError, json.JSONDecodeError) as e:
@@ -115,7 +119,7 @@ class OIDCConfig:
             if not isinstance(uris, list) or not uris or not all(isinstance(u, str) for u in uris):
                 raise ConfigError(f"{client_id}: redirect_uris must be a non-empty list")
             for uri in uris:
-                if not _is_secure_url(uri) or urlsplit(uri).fragment:
+                if not _is_secure_url(uri, allow_insecure) or urlsplit(uri).fragment:
                     raise ConfigError(f"{client_id}: insecure or invalid redirect_uri {uri}")
             secret = entry.get("client_secret_sha256")
             if secret is not None and (
@@ -143,7 +147,8 @@ class OIDCConfig:
             return None
 
         clients_file = os.environ.get("NODETIDE_OIDC_CLIENTS_FILE")
-        clients = cls.load_clients(clients_file) if clients_file else {}
+        insecure = os.environ.get("NODETIDE_OIDC_ALLOW_INSECURE") == "1"
+        clients = cls.load_clients(clients_file, insecure) if clients_file else {}
 
         key_file = os.environ.get("NODETIDE_OIDC_KEY_FILE")
         if key_file:
@@ -164,4 +169,5 @@ class OIDCConfig:
                 h.strip().lower() for h in os.environ.get("NODETIDE_OIDC_TRUSTED_ISSUERS", "").split(",") if h.strip()
             ],
             name_match=os.environ.get("NODETIDE_OIDC_NAME_MATCH", "transliterated"),
+            allow_insecure=insecure,
         )

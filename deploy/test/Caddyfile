@@ -1,0 +1,12 @@
+# Used by the optional "edge" profile. *_SITE are host names (automatic HTTPS) or http://host:port (local testing).
+{$NODE_SITE} {
+	reverse_proxy node:4557
+}
+
+{$RP_SITE} {
+	reverse_proxy rp:4180
+}
+
+{$WALLET_SITE} {
+	reverse_proxy wallet:4572
+}

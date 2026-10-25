@@ -45,3 +45,10 @@ identity-*.json
 
 # Signing testkit: virtualenv, isolated identity, attestation files (contain personal data)
 .testkit/
+
+# Test stack: secrets, generated config, trust anchors (certificates), smoke-test keys
+deploy/test/.env
+deploy/test/config/
+deploy/test/.smoke/
+deploy/test/anchors/*
+!deploy/test/anchors/.gitkeep

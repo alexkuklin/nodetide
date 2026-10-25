@@ -3,6 +3,41 @@
 Progress notes kept between sessions. Newest first. Each entry says what changed, why, and what is
 still open, so a new session can pick up without re-deriving context.
 
+## 2026-10-25 (deployment) - docker-compose test stack
+
+### Added
+- **`deploy/test/`**: a compose stack for testing on a server: `node` (OIDC bridge, email verifier, eID proof
+  verifier, explorer), `mailpit` (catches verification emails), `rp` (**oauth2-proxy**, a standard OIDC client,
+  in front of a page that prints the claims it receives), `wallet` (a test stand-in for the Nodetide app: identity,
+  claims, email verification through the test mailbox, statement signing, sign-in approval) and an optional Caddy
+  `edge`. Self-contained image built from the repo (no ECR/base image). `init.sh` writes `.env` and
+  `config/clients.json` with random secrets, `deploy.sh` copies + builds + starts over ssh, `smoke.py` plays a
+  browser through the whole sign-in. See `deploy/test/README.md`.
+- **Validated locally with Docker**: `smoke.py run` passes against the stack, including oauth2-proxy completing OIDC
+  discovery, PKCE, confidential-client auth and RS256 id_token verification against the bridge, verified email and
+  (synthetic CA) legal name released, nothing released when the wallet shares nothing, and the explorer not
+  showing the email address.
+- `nodetide eid sign-file STATEMENT` signs a canonical claim statement made elsewhere (the wallet) with the card;
+  refuses anything that is not a Nodetide claim statement. `nodetide eid anchors` now also accepts a bare `.p7s`.
+  Testkit: `sign-file`, `anchors [FILE] --out DIR`.
+- `NODETIDE_OIDC_ALLOW_INSECURE=1` accepts http issuer / redirect URIs (local testing only).
+- Root `.dockerignore` (keeps secrets and the testkit out of the build context).
+
+### Fixed
+- `golang/go.sum` was never committed, so the Go Docker build (and CI) failed with "missing go.sum entry";
+  added it and dropped the unused `x/crypto` requirement.
+
+### Findings about CI (not changed)
+- "Build and Push Docker Images" failed on the last push for two reasons unrelated to the new code: the Python build
+  could not find `nodetide:python-base-latest` in ECR (the base image workflow rebuilt it concurrently and has now
+  succeeded, so a re-run should pass) and the Go build lacked `go.sum` (fixed above). The deploy jobs were
+  skipped, so production was not touched.
+
+### Not yet done
+- **Not deployed to a server**: needs a target (ssh access, domain names, who serves ports 80/443).
+- The real-card path through the stack (wallet statement -> `sign-file` -> upload) has been run only with the
+  synthetic CA; the wallet's multipart upload form is untested with a browser.
+
 ## 2026-10-25 (latest) - signing testkit
 
 ### Added

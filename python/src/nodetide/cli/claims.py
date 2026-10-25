@@ -277,6 +277,41 @@ def eid_tokens(module: str | None):
                "A qualified signature normally needs the digital signature PIN.")
 
 
+def _open_signer(token, entry, slot: int | None, text: str):
+    """Pick the slot, show what will be signed, get confirmation. Returns (signer, slot_info).
+
+    The signer is not logged in yet: the caller calls signer.login() (which asks for the PIN).
+    """
+    slots = token.slots()
+    if slot is None:
+        if len(slots) == 1:
+            slot = slots[0].slot
+        else:
+            click.echo("This token has several slots, each with its own PIN:")
+            for info in slots:
+                hint = "  <- digital signature PIN (usually the one for qualified signatures)" if info.looks_like_signature_slot else ""
+                click.echo(f"  slot {info.slot}: {info.label} - {_slot_state(info)}{hint}")
+            guess = next((i.slot for i in slots if i.looks_like_signature_slot), slots[0].slot)
+            slot = click.prompt("Slot to log in to", type=int, default=guess)
+    info = token.slot_info(slot)
+    if info.pin_locked:
+        raise click.ClickException(f"The PIN of slot {slot} is locked. Unblock it with your PUK first.")
+
+    click.echo("\nYou are about to sign this statement:\n")
+    click.echo(text)
+    click.echo(f"\nwith the certificate of: {entry.subject}")
+    click.echo(f"and the PIN of slot {slot} ({info.label}).")
+    if info.pin_final_try:
+        click.echo("\n!! Only ONE PIN attempt is left on this slot. A wrong PIN will LOCK it.")
+        if not click.confirm("Continue anyway?", default=False):
+            raise click.Abort()
+    elif info.pin_count_low:
+        click.echo("\nNote: some PIN attempts on this slot have already failed.")
+    if not click.confirm("Sign?", default=False):
+        raise click.Abort()
+    return token.signer(entry, slot, lambda reason: click.prompt(reason, hide_input=True)), info
+
+
 @eid.command("sign")
 @click.argument("claim_id")
 @click.option("--module", help="PKCS#11 module path")
@@ -301,37 +336,8 @@ def eid_sign(claim_id: str, module: str | None, slot: int | None, cert_index: in
     try:
         token = Pkcs11Token(find_module(module))
         entry = token.choose_certificate(cert_index)
-        slots = token.slots()
-
-        if slot is None:
-            if len(slots) == 1:
-                slot = slots[0].slot
-            else:
-                click.echo("This token has several slots, each with its own PIN:")
-                for info in slots:
-                    hint = "  <- digital signature PIN (usually the one for qualified signatures)" if info.looks_like_signature_slot else ""
-                    click.echo(f"  slot {info.slot}: {info.label} - {_slot_state(info)}{hint}")
-                guess = next((i.slot for i in slots if i.looks_like_signature_slot), slots[0].slot)
-                slot = click.prompt("Slot to log in to", type=int, default=guess)
-        info = token.slot_info(slot)
-        if info.pin_locked:
-            raise click.ClickException(f"The PIN of slot {slot} is locked. Unblock it with your PUK first.")
-
         text, _, _ = statement_for(identity.sigchain, record, entry.facts.not_after, valid_days)
-        click.echo("\nYou are about to sign this statement:\n")
-        click.echo(text)
-        click.echo(f"\nwith the certificate of: {entry.subject}")
-        click.echo(f"and the PIN of slot {slot} ({info.label}).")
-        if info.pin_final_try:
-            click.echo("\n!! Only ONE PIN attempt is left on this slot. A wrong PIN will LOCK it.")
-            if not click.confirm("Continue anyway?", default=False):
-                raise click.Abort()
-        elif info.pin_count_low:
-            click.echo("\nNote: some PIN attempts on this slot have already failed.")
-        if not click.confirm("Sign?", default=False):
-            raise click.Abort()
-
-        signer = token.signer(entry, slot, lambda reason: click.prompt(reason, hide_input=True))
+        signer, _ = _open_signer(token, entry, slot, text)
         signer.login()
         attestation = build_eidas_attestation(identity.sigchain, record, signer, valid_days)
     except Pkcs11Error as e:
@@ -344,6 +350,55 @@ def eid_sign(claim_id: str, module: str | None, slot: int | None, cert_index: in
     storage.close()
     click.echo(f"\nAttestation written to {target}")
     _describe(attestation)
+
+
+@eid.command("sign-file")
+@click.argument("statement_file", type=click.Path(exists=True, dir_okay=False))
+@click.option("--module", help="PKCS#11 module path")
+@click.option("--slot", type=int, help="Slot whose PIN you will type (see `eid tokens`)")
+@click.option("--cert", "cert_index", type=int, help="Certificate number from `eid tokens`")
+@click.option("--out", "-o", type=click.Path(dir_okay=False), default=None,
+              help="Signature file to write (default: <statement file>.p7s)")
+def eid_sign_file(statement_file: str, module: str | None, slot: int | None, cert_index: int | None, out: str | None):
+    """Sign a claim statement made elsewhere (for example by a wallet service) with your token.
+
+    Only a canonical Nodetide claim statement is signed; anything else is refused. The result is
+    a detached CAdES signature (.p7s) to hand back to whoever made the statement.
+    """
+    from datetime import datetime, timezone
+
+    from nodetide.eidas.cms import create_cades_detached
+    from nodetide.eidas.pkcs11 import Pkcs11Error, Pkcs11Token, find_module
+    from nodetide.eidas.statement import StatementError, parse_statement
+
+    try:
+        text = Path(statement_file).read_bytes().decode("utf-8")
+        statement = parse_statement(text)
+    except (UnicodeDecodeError, StatementError) as e:
+        raise click.ClickException(f"Refusing to sign this file: it is not a Nodetide claim statement ({e})") from None
+    now = int(time.time())
+    if not now - 600 <= statement.signed_on <= now + 600:
+        raise click.ClickException("The statement's 'Signed on' time is not close to now; ask for a fresh statement")
+
+    signer = None
+    try:
+        token = Pkcs11Token(find_module(module))
+        entry = token.choose_certificate(cert_index)
+        if statement.valid_until > int(entry.facts.not_after.timestamp()):
+            raise click.ClickException("The statement is valid longer than your certificate; ask for a shorter one")
+        signer, _ = _open_signer(token, entry, slot, text)
+        signer.login()
+        der = create_cades_detached(text.encode("utf-8"), signer, datetime.fromtimestamp(statement.signed_on, tz=timezone.utc))
+    except Pkcs11Error as e:
+        raise click.ClickException(str(e)) from None
+    finally:
+        if signer is not None:
+            signer.close()
+    target = Path(out or f"{statement_file}.p7s")
+    fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "wb") as f:
+        f.write(der)
+    click.echo(f"\nSignature written to {target}. Give it back to the service that made the statement.")
 
 
 @eid.command("chain")
@@ -371,26 +426,33 @@ def eid_chain(attestation_file: str):
 
 
 @eid.command("anchors")
-@click.argument("attestation_file", type=click.Path(exists=True, dir_okay=False))
+@click.argument("signed_file", type=click.Path(exists=True, dir_okay=False))
 @click.option("--out", "-o", required=True, type=click.Path(file_okay=False), help="Directory to save the CA certificates in")
 @click.option("--allow-private", is_flag=True, help="Allow downloads from private/loopback addresses (development only)")
-def eid_anchors(attestation_file: str, out: str, allow_private: bool):
-    """Fetch the CA certificates behind an attestation, to review and save as trust anchors.
+def eid_anchors(signed_file: str, out: str, allow_private: bool):
+    """Fetch the CA certificates behind a signature, to review and save as trust anchors.
 
+    SIGNED_FILE is an attestation (JSON) or a detached signature (.p7s) made with your eID.
     Downloading a certificate does not make it trustworthy. Compare the fingerprints with the
     ones your eID provider (or the EU trusted list) publishes before you say yes.
     """
     import functools
 
     from nodetide.eidas.anchors import AnchorError, default_fetch, fetch_chain, fingerprint, write_anchors
+    from nodetide.eidas.cms import CmsError, signer_certificates
     from nodetide.eidas.verify import inspect_proof
 
-    attestation = Attestation.from_dict(json.loads(Path(attestation_file).read_text()))
-    summary = inspect_proof(attestation)
+    raw = Path(signed_file).read_bytes()
     try:
-        chain = fetch_chain(summary.cades.signer_cert,
-                            functools.partial(default_fetch, allow_private=allow_private),
-                            known=summary.cades.other_certs)
+        if raw.lstrip()[:1] == b"{":
+            summary = inspect_proof(Attestation.from_dict(json.loads(raw)))
+            signer, included = summary.cades.signer_cert, summary.cades.other_certs
+        else:
+            signer, included = signer_certificates(_read_signature(signed_file))
+    except (CmsError, ClaimError, ValueError) as e:
+        raise click.ClickException(f"Cannot read certificates from this file: {e}") from None
+    try:
+        chain = fetch_chain(signer, functools.partial(default_fetch, allow_private=allow_private), known=included)
     except AnchorError as e:
         raise click.ClickException(str(e)) from None
     if not chain:

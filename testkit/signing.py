@@ -10,7 +10,8 @@ at the prompt of `nodetide eid sign`: this script never sees, stores or logs it.
     ./testkit/run token        show your card's slots, PIN state and certificates (no PIN)
     ./testkit/run claim        create a throwaway identity and a legal-name claim
     ./testkit/run sign         sign it with your card (asks for the PIN)
-    ./testkit/run anchors      fetch the CA chain for review, then save the ones you confirm
+    ./testkit/run sign-file F  sign a statement file made by the test server's wallet (asks for the PIN)
+    ./testkit/run anchors [F]  fetch the CA chain for review, then save the ones you confirm
     ./testkit/run verify       verify the attestation as a relying party would
     ./testkit/run report       a summary with no personal data, safe to paste anywhere
     ./testkit/run clean        delete the attestation and test identity (--all: everything)
@@ -164,11 +165,22 @@ def cmd_sign(args) -> None:
     raise SystemExit(code)
 
 
+def cmd_sign_file(args) -> None:
+    """Sign a statement made elsewhere (the test server's wallet). The card is the same; only the input differs."""
+    cmd = ["eid", "sign-file", args.statement]
+    for flag, value in (("--module", args.module), ("--slot", args.slot), ("--cert", args.cert), ("--out", args.out)):
+        if value is not None:
+            cmd += [flag, str(value)]
+    say("The next step talks to your card. Read what it shows before you type the PIN.\n")
+    raise SystemExit(nodetide(*cmd).returncode)
+
+
 def cmd_anchors(args) -> None:
-    need_claim()
-    if not ATTESTATION.exists():
-        fail("no attestation yet: run ./testkit/run sign")
-    raise SystemExit(nodetide("eid", "anchors", str(ATTESTATION), "--out", str(private_dir(ANCHORS))).returncode)
+    source = Path(args.file) if args.file else ATTESTATION
+    if not source.exists():
+        fail(f"{source} does not exist: run ./testkit/run sign (or give a .p7s from sign-file)")
+    out = Path(args.out) if args.out else ANCHORS
+    raise SystemExit(nodetide("eid", "anchors", str(source), "--out", str(private_dir(out)) if not args.out else str(out)).returncode)
 
 
 def cmd_verify(args) -> None:
@@ -277,7 +289,18 @@ def main() -> None:
     p.add_argument("--valid-days", type=int, default=7)
     p.set_defaults(fn=cmd_sign)
 
-    sub.add_parser("anchors", help="fetch and review the CA chain, save the ones you confirm").set_defaults(fn=cmd_anchors)
+    p = sub.add_parser("sign-file", help="sign a statement file from the test server's wallet")
+    p.add_argument("statement")
+    p.add_argument("--module")
+    p.add_argument("--slot", type=int)
+    p.add_argument("--cert", type=int)
+    p.add_argument("--out", help="signature file to write (default: <statement>.p7s)")
+    p.set_defaults(fn=cmd_sign_file)
+
+    p = sub.add_parser("anchors", help="fetch and review the CA chain, save the ones you confirm")
+    p.add_argument("file", nargs="?", help="attestation (default) or a .p7s from sign-file")
+    p.add_argument("--out", help="directory for the CA certificates (default: the kit's own; use deploy/test/anchors for the server)")
+    p.set_defaults(fn=cmd_anchors)
 
     p = sub.add_parser("verify", help="verify the attestation against the saved anchors")
     p.add_argument("--revocation", choices=["hard-fail", "soft-fail", "off"], default="hard-fail")

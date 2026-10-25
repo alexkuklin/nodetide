@@ -283,3 +283,19 @@ def verify_cades_detached(der: bytes, content: bytes) -> ParsedCades:
         signing_time=signing_time,
         signed_attrs={k: v for k, v in attrs.items()},
     )
+
+
+def signer_certificates(der: bytes) -> tuple[x509.Certificate, list[x509.Certificate]]:
+    """(signer certificate, other included certificates) of a CMS signature.
+
+    Reads only the structure: nothing is verified, so this suits looking at who signed
+    (and which CAs are named) before deciding whom to trust.
+    """
+    try:
+        data = cms.ContentInfo.load(der)["content"]
+        certs = [c.chosen for c in (data["certificates"] or []) if c.name == "certificate"]
+        sid = data["signer_infos"][0]["sid"].chosen
+        signer = next(c for c in certs if c.serial_number == sid["serial_number"].native and c.issuer == sid["issuer"])
+    except Exception:
+        raise CmsError("not a CMS signature with an included signer certificate") from None
+    return signer, [c for c in certs if c is not signer]

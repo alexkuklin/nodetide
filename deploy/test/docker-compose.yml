@@ -1,0 +1,153 @@
+# Nodetide test stack: node + OIDC bridge + email verifier + a standard OIDC client + a test wallet.
+#
+#   ./init.sh --domain example.org     # writes .env and config/ (once)
+#   docker compose up -d --build       # add --profile edge if nothing else serves ports 80/443
+#
+# Everything binds to 127.0.0.1; put a reverse proxy in front (see nginx.conf.example) or use the
+# bundled Caddy edge. Service names reach each other, and the public host names reach the proxy
+# through host-gateway, so the browser and the containers use the very same URLs.
+name: nodetide-test
+
+x-hosts: &hosts
+  extra_hosts:
+    - "${NODE_HOST}:host-gateway"
+    - "${RP_HOST}:host-gateway"
+    - "${WALLET_HOST}:host-gateway"
+
+x-image: &image
+  image: nodetide-test:${IMAGE_TAG:-local}
+  build:
+    context: ../..
+    dockerfile: deploy/test/Dockerfile
+    args:
+      GIT_COMMIT: ${GIT_COMMIT:-unknown}
+
+services:
+  node:
+    <<: [*hosts, *image]
+    restart: unless-stopped
+    environment:
+      GIT_COMMIT: ${GIT_COMMIT:-unknown}
+      # sign-in with any Nodetide identity through standard OIDC
+      NODETIDE_OIDC_ISSUER: ${NODE_URL}
+      NODETIDE_AUTH_AUDIENCE: ${NODE_URL}
+      NODETIDE_OIDC_CLIENTS_FILE: /config/clients.json
+      NODETIDE_OIDC_KEY_FILE: /data/oidc_signing_key.pem
+      NODETIDE_OIDC_ALLOW_INSECURE: ${ALLOW_INSECURE:-0}
+      # email claims verified through the test mailbox (nothing leaves the stack)
+      NODETIDE_EMAIL_VERIFIER: "1"
+      NODETIDE_SMTP_HOST: mailpit
+      NODETIDE_SMTP_PORT: "1025"
+      NODETIDE_SMTP_SECURITY: none
+      NODETIDE_EMAIL_FROM: verify@${NODE_HOST}
+      NODETIDE_ISSUER_NAME: Nodetide test verifier
+      # qualified-signature proofs, judged against ./anchors
+      NODETIDE_EIDAS_REVOCATION: ${EIDAS_REVOCATION:-hard-fail}
+    volumes:
+      - node-data:/data
+      - ./config:/config:ro
+      - ${ANCHORS_DIR:-./anchors}:/anchors:ro
+    ports:
+      - "127.0.0.1:${NODE_PORT:-4570}:4557"
+    depends_on:
+      mailpit:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:4557/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  mailpit:
+    image: axllent/mailpit:v1.27
+    restart: unless-stopped
+    environment:
+      MP_MAX_MESSAGES: "500"
+    ports:
+      - "127.0.0.1:${MAIL_PORT:-4573}:8025"   # the mailbox UI; keep it private (SSH tunnel)
+
+  wallet:
+    <<: [*hosts, *image]
+    restart: unless-stopped
+    command: ["python", "/opt/wallet/app.py"]
+    environment:
+      NODE_URL: ${NODE_URL}
+      WALLET_URL: ${WALLET_URL}
+      MAILPIT_URL: http://mailpit:8025
+      WALLET_PASSWORD: ${WALLET_PASSWORD}
+      DATA_DIR: /data
+      PORT: "4572"
+    volumes:
+      - wallet-data:/data
+    ports:
+      - "127.0.0.1:${WALLET_PORT:-4572}:4572"
+    depends_on:
+      node:
+        condition: service_healthy
+
+  echo:
+    <<: *image
+    restart: unless-stopped
+    command: ["python", "/opt/echo/app.py"]
+    environment:
+      PORT: "8080"
+
+  rp:
+    <<: *hosts
+    image: quay.io/oauth2-proxy/oauth2-proxy:v7.12.0
+    restart: unless-stopped
+    environment:
+      OAUTH2_PROXY_PROVIDER: oidc
+      OAUTH2_PROXY_OIDC_ISSUER_URL: ${NODE_URL}
+      OAUTH2_PROXY_CLIENT_ID: ${OIDC_CLIENT_ID}
+      OAUTH2_PROXY_CLIENT_SECRET: ${OIDC_CLIENT_SECRET}
+      OAUTH2_PROXY_REDIRECT_URL: ${RP_URL}/oauth2/callback
+      OAUTH2_PROXY_SCOPE: openid profile email
+      OAUTH2_PROXY_CODE_CHALLENGE_METHOD: S256
+      OAUTH2_PROXY_EMAIL_DOMAINS: "*"
+      OAUTH2_PROXY_OIDC_EMAIL_CLAIM: sub        # the identity hash; an email may not have been verified
+      OAUTH2_PROXY_USER_ID_CLAIM: sub
+      OAUTH2_PROXY_UPSTREAMS: http://echo:8080
+      OAUTH2_PROXY_HTTP_ADDRESS: 0.0.0.0:4180
+      OAUTH2_PROXY_COOKIE_SECRET: ${COOKIE_SECRET}
+      OAUTH2_PROXY_COOKIE_SECURE: ${COOKIE_SECURE:-true}
+      OAUTH2_PROXY_PASS_AUTHORIZATION_HEADER: "true"   # the echo page reads the id_token from it
+      OAUTH2_PROXY_SET_XAUTHREQUEST: "true"
+      OAUTH2_PROXY_SKIP_PROVIDER_BUTTON: "true"
+      OAUTH2_PROXY_REVERSE_PROXY: "true"
+      OAUTH2_PROXY_SSL_INSECURE_SKIP_VERIFY: ${SKIP_TLS_VERIFY:-false}
+    ports:
+      - "127.0.0.1:${RP_PORT:-4571}:4180"
+    depends_on:
+      echo:
+        condition: service_started
+      node:
+        condition: service_healthy
+      edge:
+        condition: service_started
+        required: false   # only present with the edge profile
+
+  # Optional: terminates TLS (Let's Encrypt) for the three host names. Needs ports 80/443 free.
+  edge:
+    image: caddy:2
+    profiles: ["edge"]
+    restart: unless-stopped
+    environment:
+      NODE_SITE: ${NODE_SITE}
+      RP_SITE: ${RP_SITE}
+      WALLET_SITE: ${WALLET_SITE}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+    ports:
+      - "${EDGE_HTTP_PORT:-80}:${EDGE_HTTP_PORT:-80}"
+      - "${EDGE_HTTPS_PORT:-443}:${EDGE_HTTPS_PORT:-443}"
+    depends_on:
+      node:
+        condition: service_healthy
+
+volumes:
+  node-data:
+  wallet-data:
+  caddy-data:
