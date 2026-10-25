@@ -81,6 +81,8 @@ Identity = hash(event_0) = "7f3a8b..." (stable forever)
 | `REVOKE_DEVICE` | master | Explicit revocation |
 | `ROTATE_MASTER` | old master | Normal key rotation |
 | `SOCIAL_RECOVERY` | threshold of trustees | Emergency recovery |
+| `ADD_CLAIM` | master or device with `manage_claims` | Commit to a claim about this identity (value stays off-chain) |
+| `REVOKE_CLAIM` | master or device with `manage_claims` | Withdraw a claim |
 
 ## Revocation
 
@@ -202,6 +204,7 @@ Distribution points are hints, not authoritative. The identity hash remains the 
 2. Track current valid master key
 3. Track active device keys (added, not revoked, not expired)
 4. Accept messages signed by any currently-valid key
+5. `ADD_CLAIM` and `REVOKE_CLAIM` must be signed by the current master key or by a device that was added, not revoked, not expired at the event's time, and holds `manage_claims`. A `claim_id` may be added only once; a revocation must name an existing, not yet revoked claim. Chains that break these rules are invalid.
 
 ## Design Decisions
 
@@ -302,7 +305,8 @@ ADD_DEVICE = {
 Possible capabilities:
 - `sign_messages` - can sign chat/messages
 - `sign_files` - can sign file attestations
-- `sign_identity` - can vouch for other identities (usually master only)
+- `sign_identity` - can issue attestations about other identities' claims (see Claims and Attestations)
+- `manage_claims` - can add and revoke this identity's own claims
 - `encrypt` - can receive encrypted content
 
 ## Timestamps
@@ -359,7 +363,7 @@ If primary trustees fail to respond within timeout, backup tier becomes eligible
 
 ### Pseudonymous
 
-Identities with no real-world binding are allowed. The trust model handles this naturally - others simply won't have `IdentityAssertion` records linking the hash to a real name.
+Identities with no real-world binding are allowed. The trust model handles this naturally - nobody will have issued an attestation for a `legal_name` claim of that identity.
 
 ### Ephemeral
 
@@ -401,60 +405,157 @@ Org actions require signatures from authorized personal identities.
 
 Scope: Identity verification and trust delegation only. Content trust is out of scope for this system.
 
-### Identity Assertions
+### Claims and Attestations
 
-Claims about who an identity belongs to:
+An identity can make **claims** about itself (an email address, a phone number, a legal name). A third party can then issue an **attestation** that it verified a claim. Whether to believe an attestation is entirely up to the party relying on it.
+
+This replaces the earlier `IdentityAssertion`. Strong identification is voluntary: an identity that makes no claims is simply pseudonymous, and a claim is only ever revealed by its holder.
+
+#### Claim
+
+A claim has two parts. Only the first goes on the sigchain.
 
 ```
-IdentityAssertion = {
-  subject: <identity hash>,
-  claimed_name: "John Doe",
-  verification: "IN_PERSON" | "VIDEO" | "VOUCHED" | "SOCIAL_PROOF" | "CLAIMED",
-  confidence: -1.0 to 1.0,
-  timestamp: <unix>,
-  note: "Met at DEF CON 2025, verified fingerprint"
+ADD_CLAIM = {                      # sigchain event; master or device with manage_claims
+  claim_id: <128 random bits, base64url>,
+  claim_type: "email" | "phone" | "legal_name" | "x-<vendor>:<name>",
+  commitment: hex(hash("nodetide-claim-v1\0" || claim_id || 0 || claim_type || 0 || salt || 0 || canonical(value))),
+  expires: <unix, optional>,
+  prev: <hash>, sig: ...
+}
+
+REVOKE_CLAIM = { claim_id, reason, prev, sig }
+
+ClaimDocument = {                  # kept by the holder; NOT on the chain
+  identity: <identity hash>,
+  claim_id, claim_type,
+  value: <normalized value>,
+  salt: <16 random bytes, hex>
 }
 ```
 
-| Confidence | Meaning |
-|------------|---------|
-| +1.0 | Certain this identity is the claimed person |
-| +0.5 | Reasonably confident |
-| 0.0 | No information |
-| -0.5 | Doubtful this is the claimed person |
-| -1.0 | Certain this is NOT the claimed person (impersonation) |
+- **Why a commitment:** a sigchain is public and append-only, so a name or phone number written into it could never be erased. The chain records only that the holder made a claim of some type, and lets the holder revoke it.
+- **The salt is mandatory.** Phone numbers and common names are easy to guess; without a random salt the commitment could be reversed by trying candidates.
+- **Disclosure:** whoever holds a `ClaimDocument` can recompute the commitment and compare it to the chain. The holder decides who receives it: one verifier, one relying party, or everyone (a *public claim*, e.g. published through a node). Nothing obliges a holder to publish.
+- **What stays visible:** that a claim of a given type exists, when it was made, and whether it was revoked or expired.
 
-Verification levels:
+Normalized values (so that equal values give equal commitments):
 
-| Level | Method |
-|-------|--------|
-| `IN_PERSON` | Physical key exchange |
-| `VIDEO` | Live video verification |
-| `VOUCHED` | Verified by someone you trust |
-| `SOCIAL_PROOF` | Public proofs (signed statement on known account/website) |
-| `CLAIMED` | Unverified self-assertion |
+| Type | Value |
+|------|-------|
+| `email` | string `local@domain`, domain lowercased and IDNA-encoded, local part unchanged, surrounding whitespace removed |
+| `phone` | E.164 string, e.g. `"+359881234567"` |
+| `legal_name` | `{"given_name": "...", "family_name": "..."}`, Unicode NFC, original casing |
+
+Strings are Unicode NFC. Personal identification numbers (national ID, tax ID) are deliberately not a claim type and MUST NOT be copied into claims or attestations.
+
+#### Attestation
+
+```
+Attestation = {
+  type: "ATTESTATION", version: 1,
+  subject: <identity hash>,
+  claim_id, claim_type, commitment,        # exactly as in the holder's ADD_CLAIM
+  method: "email_code" | "eidas_qes" | "manual" | "x-...",
+  assurance: "low" | "substantial" | "high",
+  issued_at: <unix>, expires_at: <unix>,
+  chain_head: <hash of the holder's newest sigchain event the issuer saw>,
+  issuer: <identity hash>,                 # absent for self-contained proofs, see below
+  signed_by: <issuer device pubkey, hex>,  # absent for self-contained proofs
+  evidence: { ... },                       # method specific, never personal data
+  proof: { ... },                          # self-contained proofs only
+  sig: <issuer device key over "nodetide-attest-v1\0" || canonical(body without sig)>
+}
+id = hash(canonical(attestation))
+```
+
+- **Issuer:** a Nodetide identity (typically an organization identity). Its signing key must be an active device holding `sign_identity`; the master key MUST NOT sign attestations. An attestation says nothing about the claim's *value* beyond what the issuer verified for that commitment, so a relying party still needs the `ClaimDocument` to learn the value.
+- **Assurance** follows the eIDAS levels: `low` (control of a channel, such as an inbox), `substantial`, `high` (qualified electronic signature, or an in-person document check).
+- **`chain_head`** ties the attestation to a moment in the holder's key history (see Evaluation).
+- **Revocation:** `AttestationRevocation = { attestation_id, issuer, signed_by, reason, issued_at, sig }`, signed by an active `sign_identity` device of the issuer under domain `"nodetide-attest-revoke-v1\0"`. Both objects travel as bundles (`attestation`, `attestation_revocation`); revocations get the same priority as other revocations. Attestations expire; issuers SHOULD use at most one year. An attestation signed by a device that is later revoked stops being valid, and a revocation may arrive before the attestation it revokes.
+
+Attestations carry no personal data and are published freely. A node holding a claim's attestations never learns the claim's value unless the holder publishes the document.
+
+##### Self-contained proofs
+
+An authority that is not a Nodetide identity (a government eID scheme, for instance) cannot sign an `Attestation`. Instead the holder obtains a signature from the authority's own scheme over a fixed statement, and the attestation carries it as `proof`. There is then no `issuer`, `signed_by` or `sig`: the proof is the signature, and the relying party validates it against trust anchors it chooses.
+
+**A proof embeds the signer's certificate, which carries personal identifiers (for qualified certificates, typically a national ID number). Attestations with a proof therefore MUST NOT be published, gossiped or stored by nodes.** The holder gives one directly to a relying party, which verifies it (a node can do this statelessly) and discards it.
+
+The statement is plain text so a signing application can show it to the person signing:
+
+```
+NODETIDE CLAIM STATEMENT v1
+Identity: <identity hash>
+Claim: <claim_id>
+Type: <claim_type>
+Commitment: <commitment>
+Chain head: <hash>
+Signed on: <ISO 8601 UTC, e.g. 2026-10-25T12:00:00Z>
+Valid until: <same format>
+By signing I confirm that I control the Nodetide identity above and that
+this claim's value is mine.
+```
+
+The statement is signed exactly as written (UTF-8, LF line endings, no trailing newline), and a verifier accepts only this canonical form. Binding it to the identity hash, the commitment and the chain head is what prevents replay: an ordinary "this person authenticated" token proves nothing about *which* Nodetide identity is theirs.
+
+#### Verification methods
+
+**`email_code`** (assurance `low`). A verifier node checks that the holder controls an inbox.
+
+1. The holder sends the verifier the `ClaimDocument` and an `AuthAssertion` bound to the verifier's origin (proof that the request comes from a key of the identity; this also stops anyone using the verifier to send mail to strangers). The assertion's signed `claims` MUST be `{"purpose": "claim_verification", "claim_id": "<the claim>"}`, so the holder's consent covers exactly this claim.
+2. The verifier checks the claim exists on the holder's chain, is not revoked or expired, and matches the commitment. It emails a single-use code (valid 15 minutes) to the address, with rate limits per address, identity and client.
+3. The holder returns the code (8 characters, single use, five attempts). The verifier issues the attestation. `evidence` is empty; the address is not repeated.
+
+The verifier learns the address and the salt for that one claim, which is inherent to verifying it.
+
+**`eidas_qes`** (assurance up to `high`). The holder signs the statement above with an electronic signature made with a qualified certificate (detached CAdES, `proof = {format: "cades-detached", statement, signature}` with the signature as base64 DER). The relying party validates that:
+
+1. the signature is cryptographically valid and covers the exact statement text; the signer certificate is the one the signature names (ESS signing-certificate or signing-certificate-v2); RSA keys are at least 2048 bits and digests are SHA-2;
+2. the statement's identity, claim, commitment and chain head match the attestation; `issued_at` equals the statement's *Signed on*; `expires_at` is not later than the statement's *Valid until* or the certificate's expiry; a signing-time attribute, if present, agrees with *Signed on*;
+3. the signer certificate is a certificate for signing documents (key usage content commitment), and its qualified-certificate statements give the assurance: `high` for a qualified certificate on a qualified signature creation device, `substantial` for a qualified one without, otherwise `low`. The attestation's `assurance` MUST NOT exceed it;
+4. the certificate chains to a trust anchor the relying party has chosen (for qualified signatures, the CA certificates of qualified trust service providers from the EU trusted lists) and is **currently** valid and not revoked.
+5. for `legal_name`, the disclosed value matches the certificate's given and family names exactly, or after transliteration of Cyrillic to Latin by the Bulgarian Streamlined System.
+
+Point 4 makes a proof-based attestation valid only while the certificate is: it is re-checked every time, and revocation fetching happens only for certificates that already chain to a configured anchor, never from URLs named by an unknown certificate. Proof attestations SHOULD be short-lived (days to weeks) because the proof carries no trusted timestamp. The certificate's personal identifier is not copied anywhere.
+
+#### Evaluating a claim
+
+A relying party holds a policy such as "accept `legal_name` when attested by one of these issuers or by an eIDAS QES, assurance `high`, not older than a year". For a presented `ClaimDocument` and attestation it:
+
+1. finds `ADD_CLAIM` for `claim_id` on the (verified) sigchain; rejects if revoked or expired;
+2. recomputes the commitment from the document and compares;
+3. validates the attestation: signature and issuer key state for issued attestations, the full proof for self-contained ones; rejects if expired or revoked;
+4. checks that the issuer or authority is acceptable under its policy (explicit list, trust anchors, or a trust delegation path, below) and the assurance is high enough;
+5. optionally rejects the attestation if the holder's chain contains a `SOCIAL_RECOVERY` after `chain_head`: the people controlling the identity may have changed, so the holder is asked to verify again.
+
+The result is a *verified claim*: type, value, issuer or authority, assurance and age. The same attestation can satisfy one relying party and be ignored by another.
+
+If two acceptable attestations for the same identity and claim type disclose different values, the claim is **contested** and both are shown; the relying party decides.
 
 ### Trust Delegation
 
-How much you trust someone else's identity assertions:
+How much you trust another identity to issue attestations:
 
 ```
 TrustDelegation = {
   subject: <identity hash>,
   weight: 0.0 to 1.0,
+  scope: ["email", "legal_name"],    # optional claim types; absent = all
   depth_limit: <int, optional>,
   timestamp: <unix>
 }
 ```
 
-Weight of 0.0 = ignore their assertions. Weight of 1.0 = fully trust their judgment.
+Weight 0.0 = ignore their attestations. Weight 1.0 = fully trust their judgment. A delegation to an issuer is how a relying party says "I trust this organization to verify legal names".
 
 ### Transitive Trust Calculation
 
 ```
-Path trust = my_delegation(A) × A's_delegation(B) × ... × final_confidence
+Path trust = my_delegation(A) × A's_delegation(B) × ... × delegation(issuer)
 Multiple paths = max(path1, path2, ...)
-Depth limit = configurable per-delegation (optional)
+Only delegations whose scope includes the claim type count.
+Depth limit = a delegation's depth_limit caps how many further delegations may be followed beyond its delegate
 ```
 
 Example:
@@ -462,17 +563,25 @@ Example:
 - I trust Carol at 0.8, Carol trusts Bob at 0.7 → path trust = 0.56
 - Result: max(0.54, 0.56) = 0.56
 
-### Contested Identity
+How much an attestation is worth is then `path trust to its issuer`, combined with a local mapping from assurance level to a factor (a relying party's choice, not part of the protocol).
 
-When positive and negative assertions conflict:
+### Migration from IdentityAssertion
 
-| Via Alice | Via Bob | Result |
-|-----------|---------|--------|
-| +0.8 "is John" | — | +0.8 |
-| — | -0.9 "is NOT John" | -0.9 |
-| +0.8 "is John" | -0.7 "is NOT John" | **CONTESTED** |
+`IdentityAssertion` (a third party's opinion, with a confidence from −1 to +1, about who an identity is) is withdrawn. Its use cases move to claims: the holder states a name, someone verifies it. What has no counterpart yet is the *negative* assertion ("this is not that person"); a separate `Dispute` object may fill that role later. Implementations remove it: nodes no longer accept, store, serve or use assertions in trust calculation.
 
-Contested identities surface both assertions rather than computing a combined score. User must resolve manually.
+### Privacy
+
+- Claim values never appear on a sigchain; only salted commitments do.
+- A claim's type and existence are visible. Holders who want to hide even that should keep claims off their identity and present them elsewhere.
+- Presenting the same claim to several parties lets them link the identity across services. Unlinkable presentation is out of scope.
+- Verifiers and relying parties see only the claims a holder chooses to disclose to them.
+
+### Open points
+
+- Trusted-list handling: operators currently supply the CA certificates by hand; reading and refreshing the EU trusted lists automatically is not specified.
+- Trusted timestamps (CAdES-T) are not required or checked, hence the short lifetimes above.
+- Transliteration rules beyond the Bulgarian Streamlined System.
+- Claim types other than the three defined are namespaced `x-<vendor>:<name>` and have no verification methods yet.
 
 ## Transport Layer
 
@@ -1056,6 +1165,125 @@ Potential dimensions:
 - Authenticity (who created it)
 - Quality/accuracy
 - Safety (malicious content)
+
+## Authentication (SSO)
+
+Lets an identity prove control of its keys to a third-party service (the **relying party**, RP) without a shared secret or a central identity provider. The sigchain is the credential store; a device key signature is the credential.
+
+### The `authenticate` Capability
+
+A new device capability, separate from `sign_messages` and `sign_files`:
+
+```
+ADD_DEVICE = {
+  device_pubkey: <key>,
+  capabilities: ["authenticate", "sign_messages"],
+  ...
+}
+```
+
+- A key may produce an `AuthAssertion` only if it holds `authenticate`.
+- The master key MUST NOT sign `AuthAssertion`s. Logins use device keys so the master stays out of daily use.
+- If `capabilities` is omitted (default: all), `authenticate` is included, but clients SHOULD grant it explicitly.
+
+### Auth Request
+
+The RP generates a challenge and delivers it by any means (redirect, QR code, deep link, BLE, NFC):
+
+```
+AuthRequest = {
+  type: "AUTH_REQUEST",
+  aud: "https://app.example.com",   // RP origin; REQUIRED
+  nonce: <128+ random bits, base64url>,
+  issued_at: <unix>,
+  expires_at: <unix>,               // RECOMMENDED lifetime <= 5 min
+  callback: "https://app.example.com/auth/callback",  // optional
+  claims: ["name"],                 // optional, see Claims
+}
+```
+
+### Auth Assertion
+
+The signer shows the user `aud` and any requested `claims`, and asks for consent. If approved, it signs:
+
+```
+AuthAssertion = {
+  type: "AUTH_ASSERTION",
+  identity: <identity hash>,
+  device: <device pubkey>,
+  aud: <copied from request>,
+  nonce: <copied from request>,
+  iat: <unix>,
+  exp: <unix, <= request.expires_at>,
+  chain_head: <hash of newest sigchain event the signer knows>,
+  sig: <signature by device key over canonical(assertion without sig)>
+}
+```
+
+The signature input is prefixed with the domain-separation string `"nodetide-auth-v1\0"` so an `AuthAssertion` signature can never be valid as a message, file or trust-assertion signature.
+
+`chain_head` lets the RP detect stale state: if the RP's copy of the sigchain does not contain `chain_head`, it MUST fetch the newer chain before deciding. This closes most of the revocation-latency gap in DTN settings.
+
+### RP Verification
+
+1. Check `aud` equals the RP's own origin, `nonce` matches an outstanding request that has not been used, and `iat <= now <= exp` (allow small clock skew).
+2. Obtain the sigchain for `identity` (distribution points, `.well-known/identity.json`, or supplied alongside the assertion) and verify it from genesis.
+3. If `chain_head` is not in the chain, fetch a newer chain and re-verify.
+4. Check `device` is currently active in the chain the RP holds (added at or before `iat`, not revoked, not expired), holds `authenticate`, and is not the current master key. A revocation the RP knows about wins even if it happened after `iat`.
+5. Verify `sig` with `device`.
+6. Mark the nonce used.
+
+The RP learns the stable identity hash, not any real-world name. The hash stays constant across key rotation and recovery, so the RP can use it as a durable account key.
+
+### Presented claims
+
+Optional. Anything beyond the identity hash is either self-asserted by the user (the `claims` object inside an `AuthAssertion`) or backed by a claim and attestation (see Claims and Attestations).
+
+| Claim | Source |
+|-------|--------|
+| `name` | Genesis `name` (self-asserted), or a `legal_name` claim with an attestation the RP accepts |
+| `email`, `phone` | A claim document plus an attestation, evaluated by the RP |
+
+Values in the `claims` object of an assertion are signed but are only as strong as their source. RPs MUST NOT treat self-asserted values as verified.
+
+### Transport Bindings
+
+**Native (challenge-response).** The RP presents an `AuthRequest`; the client returns an `AuthAssertion`. This is the core protocol and needs no other infrastructure.
+
+**OpenID Connect (self-issued, SIOP v2).** For RPs that speak OIDC, the `AuthAssertion` is wrapped as an `id_token`:
+
+```
+header:  { alg: "EdDSA", typ: "JWT", kid: <device pubkey> }
+payload: { iss: <identity hash>, sub: <identity hash>, aud, nonce, iat, exp,
+           nodetide_chain_head: <chain_head> }
+```
+
+- `iss` equals `sub` (self-issued). The RP resolves the sigchain to find the key behind `kid`.
+- The token MUST be signed with an asymmetric algorithm (EdDSA). Symmetric algorithms (HS256) MUST NOT be used.
+- Standard libraries can validate structure and `aud`/`nonce`/`exp`, but trusting `kid` requires the sigchain check above, so a Nodetide-aware verification step is still needed.
+
+**Bridge IdP (OIDC).** For applications that cannot be changed, a node MAY run a conventional OIDC provider (authorization-code flow with PKCE, RS256 `id_token`s signed with the bridge's own key). Any Nodetide identity can sign in; the bridge needs no prior registration of users. The bridge is a trusted party: it can impersonate any user to RPs that trust it. SAML is out of scope.
+
+- **Audience:** the bridge's issuer URL. Each sign-in attempt carries an `AuthRequest` with `aud = issuer`.
+- **Subject:** `sub` is the identity hash, stable across key rotation and recovery.
+- **Answering a sign-in:** the sign-in page shows a deep link `nodetide://login?challenge_url=<url>`. The user's Nodetide app fetches the challenge (`AuthRequest` plus display info such as the RP name), shows the RP name and issuer for consent, and POSTs `{assertion, sigchain?, hints?}` to the `respond_url`. The sigchain is optional; it makes sign-in instant for identities the bridge has never seen.
+- **Browser binding:** the page that polls for the result holds a secret carried in the URL fragment, so someone who only saw the deep link or QR code cannot collect the authorization code.
+- **Unknown or stale identities:** when the bridge has no sigchain for the identity, or the signer's `chain_head` is newer than its copy, it queues a background fetch and tells the user sign-in has *failed for now*. Fetch sources are the `hints` from the app, an optional `login_hint=<identity hash>@<node url>`, the identity's own distribution points once known, and operator-configured seed nodes. Fetches are persisted, retried with backoff, and verified from genesis before use. When the chain arrives and the pending assertion is still valid, the sign-in completes by itself; if the assertion expired meanwhile, the user is asked to approve once more (now instant). A sign-in page that times out returns `error=temporarily_unavailable` to the RP, and the fetch continues, so a later attempt succeeds.
+- **Fetching untrusted URLs:** hints are attacker-controlled, so the fetcher MUST NOT contact non-public addresses, follow redirects, or read unbounded responses (SSRF).
+
+### Sessions
+
+An RP that accepts an `AuthAssertion` creates its own session. Nodetide nodes MAY issue sessions for their own APIs the same way. Session lifetime is the RP's choice; high-value actions SHOULD require a fresh `AuthAssertion`.
+
+### Security Considerations
+
+- **Phishing and relay:** `aud` binds the assertion to one origin. A phishing site can only obtain assertions for its own origin. Clients MUST display `aud` to the user and MUST NOT show an RP-supplied name instead.
+- **Replay:** one-time nonces plus short expiry. RPs MUST track nonces until expiry.
+- **Revocation:** `chain_head` plus the active-device check bounds how long a revoked device can keep logging in. RPs with high security needs SHOULD always fetch the current chain.
+- **Device compromise:** revoke the device (`REVOKE_DEVICE`). RPs that cached the chain learn of it on next fetch or via revocation propagation.
+- **Key reuse:** domain separation prevents cross-protocol signature reuse, but deployments SHOULD use a dedicated device key for `authenticate` where practical.
+- **Account recovery at the RP:** because `identity` is stable across `ROTATE_MASTER` and `SOCIAL_RECOVERY`, RPs need no account-recovery flow of their own for key loss.
+- **Correlation:** a single identity hash is a global correlator across RPs. Users who need unlinkability SHOULD use a separate (pseudonymous or ephemeral) identity per RP. Pairwise derived identifiers are possible future work.
 
 ## Identity Dump Format
 

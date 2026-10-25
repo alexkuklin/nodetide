@@ -248,16 +248,6 @@ class SubmitRecoverySignatureRequest:
 # Trust models
 
 @dataclass
-class CreateAssertionRequest:
-    """Request to create trust assertion."""
-    assertion: dict[str, Any]
-
-    @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> CreateAssertionRequest:
-        return cls(assertion=data["assertion"])
-
-
-@dataclass
 class CreateDelegationRequest:
     """Request to create trust delegation."""
     delegation: dict[str, Any]
@@ -269,22 +259,18 @@ class CreateDelegationRequest:
 
 @dataclass
 class TrustCalculationResponse:
-    """Trust calculation response."""
+    """Trust in an attestation issuer, from the caller's perspective."""
     subject: str
-    claimed_name: str | None
+    claim_type: str | None
     trust_score: float
-    is_contested: bool
     paths: list[dict[str, Any]]
-    assertions: list[dict[str, Any]]
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "subject": self.subject,
-            "claimed_name": self.claimed_name,
+            "claim_type": self.claim_type,
             "trust_score": self.trust_score,
-            "is_contested": self.is_contested,
             "paths": self.paths,
-            "assertions": self.assertions,
         }
 
 

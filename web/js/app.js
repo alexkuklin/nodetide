@@ -577,8 +577,8 @@
       return this.request('GET', `/messages?${params}`);
     },
 
-    async getTrustAssertions(identityHash) {
-      return this.request('GET', `/trust/assertions?target=${identityHash}`);
+    async getTrustDelegations(identityHash) {
+      return this.request('GET', `/trust/delegations?from=${identityHash}`);
     },
 
     async submitEvent(identityHash, event) {
@@ -1058,18 +1058,15 @@
     // Trust manager
     Alpine.data('trustManager', () => ({
       targetIdentity: '',
-      assertions: [],
       delegations: [],
       loading: false,
-      assertForm: { name: '', confidence: 1.0 },
-      delegateForm: { weight: 0.5, scope: 'identity' },
+      delegateForm: { weight: 0.5, scope: '' },
 
       async lookup() {
         if (!this.targetIdentity) return;
         this.loading = true;
         try {
-          const data = await api.getTrustAssertions(this.targetIdentity);
-          this.assertions = data.identity_assertions || [];
+          const data = await api.getTrustDelegations(this.targetIdentity);
           this.delegations = data.delegations || [];
         } catch (e) {
           Alpine.store('app').showError('Failed to load trust data');
@@ -1078,7 +1075,6 @@
         }
       },
 
-      assertName() { Alpine.store('app').showError('Not yet implemented'); },
       delegate() { Alpine.store('app').showError('Not yet implemented'); },
     }));
 

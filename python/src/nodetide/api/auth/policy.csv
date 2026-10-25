@@ -16,10 +16,43 @@ p, anonymous, /api/session, POST
 p, anonymous, /api/session, GET
 p, anonymous, /api/session, DELETE
 p, anonymous, /api/auth/token, POST
+p, anonymous, /api/auth/challenge, POST
+p, anonymous, /api/auth/verify, POST
+p, anonymous, /api/auth/login, POST
+
+# OIDC bridge - public by design (relying parties and users' browsers/apps)
+p, anonymous, /.well-known/openid-configuration, GET
+p, anonymous, /oidc/jwks.json, GET
+p, anonymous, /oidc/authorize, GET
+p, anonymous, /oidc/login/:id, GET
+p, anonymous, /oidc/login/:id/status, GET
+p, anonymous, /oidc/login/:id/challenge, GET
+p, anonymous, /oidc/login/:id/assertion, POST
+p, anonymous, /oidc/token, POST
+p, anonymous, /oidc/userinfo, GET
+p, anonymous, /oidc/userinfo, POST
 p, anonymous, /api/verify, POST
 p, anonymous, /api/lookup/:id, GET
 p, anonymous, /api/trust/*, GET
 p, anonymous, /api/trust/*, POST
+
+# Claims and attestations (verification is by signature, not by session)
+p, anonymous, /api/identities/:id/claims, GET
+p, anonymous, /api/claims/documents, POST
+p, anonymous, /api/claims/verify, POST
+p, anonymous, /api/attestations, GET
+p, anonymous, /api/attestations, POST
+p, anonymous, /api/attestations/revocations, POST
+p, anonymous, /api/attestations/:id, GET
+p, anonymous, /api/verify/issuer, GET
+p, anonymous, /api/verify/email/start, POST
+p, anonymous, /api/verify/email/confirm, POST
+
+# Explorer - read-only view of public information
+p, anonymous, /api/explorer/*, GET
+p, anonymous, /explorer, GET
+p, anonymous, /explorer/, GET
+p, anonymous, /explorer/:name, GET
 
 # Relay status and discovery is public (read-only)
 p, anonymous, /api/relay/status, GET

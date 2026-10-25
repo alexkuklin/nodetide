@@ -18,7 +18,9 @@ from nodetide.core.identity import (
     SocialRecoveryEvent,
 )
 from nodetide.core.storage import Storage
-from nodetide.core.trust import TrustGraph, IdentityAssertion, TrustDelegation
+from nodetide.core.trust import TrustGraph, TrustDelegation
+from nodetide.api.claims import setup_claims_routes
+from nodetide.api.verifiers import setup_verifier_routes
 from nodetide.api.models import (
     APIError,
     ErrorCode,
@@ -35,9 +37,9 @@ from nodetide.api.auth import (
     SessionStore,
     RecoveryStore,
     verify_event_signature,
-    verify_assertion_signature,
     verify_session_request,
     extract_bearer_token,
+    setup_native_auth_routes,
 )
 
 
@@ -584,66 +586,6 @@ async def list_pending_recoveries(request: web.Request) -> web.Response:
 
 # Trust routes
 
-async def create_assertion(request: web.Request) -> web.Response:
-    """POST /trust/assertions - Create trust assertion."""
-    storage: Storage = request.app["storage"]
-
-    try:
-        data = await request.json()
-        assertion_data = data.get("assertion")
-
-        if not assertion_data:
-            return error_response(ErrorCode.INVALID_REQUEST, "Missing assertion", 400)
-
-        asserter = assertion_data.get("asserter")
-        if not asserter:
-            return error_response(ErrorCode.INVALID_REQUEST, "Missing asserter", 400)
-
-        # Get asserter's sigchain
-        sigchain = storage.get_sigchain(asserter)
-        if not sigchain:
-            return error_response(ErrorCode.NOT_FOUND, f"Asserter {asserter} not found", 404)
-
-        # Verify signature
-        valid, err = verify_assertion_signature(assertion_data, sigchain)
-        if not valid:
-            return error_response(ErrorCode.INVALID_SIGNATURE, err or "Invalid signature", 400)
-
-        # Save assertion
-        storage.save_trust_assertion(
-            asserter_identity=assertion_data["asserter"],
-            subject_identity=assertion_data["subject"],
-            confidence=assertion_data["confidence"],
-            timestamp=assertion_data["timestamp"],
-            signature=assertion_data["signature"],
-            claimed_name=assertion_data.get("claimed_name"),
-            verification=assertion_data.get("verification"),
-            note=assertion_data.get("note"),
-        )
-
-        return web.json_response({
-            "accepted": True,
-            "asserter": assertion_data["asserter"],
-            "subject": assertion_data["subject"],
-        }, status=201)
-
-    except json.JSONDecodeError:
-        return error_response(ErrorCode.INVALID_REQUEST, "Invalid JSON", 400)
-
-
-async def list_assertions(request: web.Request) -> web.Response:
-    """GET /trust/assertions - Query assertions."""
-    storage: Storage = request.app["storage"]
-
-    subject = request.query.get("subject")
-    if not subject:
-        return error_response(ErrorCode.INVALID_REQUEST, "Missing subject parameter", 400)
-
-    assertions = storage.get_trust_assertions(subject)
-
-    return web.json_response({"assertions": assertions})
-
-
 async def create_delegation(request: web.Request) -> web.Response:
     """POST /trust/delegations - Create trust delegation."""
     storage: Storage = request.app["storage"]
@@ -662,25 +604,34 @@ async def create_delegation(request: web.Request) -> web.Response:
         data = await request.json()
         delegation_data = data.get("delegation")
 
-        if not delegation_data:
+        if not isinstance(delegation_data, dict):
             return error_response(ErrorCode.INVALID_REQUEST, "Missing delegation", 400)
 
         # Delegation must be from the session identity
         if delegation_data.get("from_identity") != session.identity:
             return error_response(ErrorCode.FORBIDDEN, "Can only create delegations from your identity", 403)
 
+        try:
+            delegation = TrustDelegation.from_dict({
+                **delegation_data,
+                "timestamp": delegation_data.get("timestamp", int(time.time())),
+            })
+        except (KeyError, TypeError, ValueError) as e:
+            return error_response(ErrorCode.INVALID_REQUEST, f"Invalid delegation: {e}", 400)
+
         storage.save_trust_delegation(
-            from_identity=delegation_data["from_identity"],
-            to_identity=delegation_data["to_identity"],
-            weight=delegation_data["weight"],
-            timestamp=delegation_data.get("timestamp", int(time.time())),
-            depth_limit=delegation_data.get("depth_limit"),
+            from_identity=delegation.from_identity,
+            to_identity=delegation.to_identity,
+            weight=delegation.weight,
+            timestamp=delegation.timestamp,
+            depth_limit=delegation.depth_limit,
+            scope=delegation.scope,
         )
 
         return web.json_response({
             "accepted": True,
-            "from": delegation_data["from_identity"],
-            "to": delegation_data["to_identity"],
+            "from": delegation.from_identity,
+            "to": delegation.to_identity,
         }, status=201)
 
     except json.JSONDecodeError:
@@ -701,12 +652,16 @@ async def list_delegations(request: web.Request) -> web.Response:
 
 
 async def calculate_trust(request: web.Request) -> web.Response:
-    """GET /trust/calculate/{hash} - Calculate transitive trust."""
+    """GET /trust/calculate/{hash}?claim_type=&max_depth= - trust in an attestation issuer."""
     storage: Storage = request.app["storage"]
     session_store: SessionStore = request.app["session_store"]
 
     subject = request.match_info["hash"]
-    max_depth = int(request.query.get("max_depth", "3"))
+    claim_type = request.query.get("claim_type") or None
+    try:
+        max_depth = max(1, min(int(request.query.get("max_depth", "3")), 6))
+    except ValueError:
+        return error_response(ErrorCode.INVALID_REQUEST, "max_depth must be an integer", 400)
 
     # Need a session to know whose perspective to use
     token = extract_bearer_token(request.headers.get("Authorization"))
@@ -717,37 +672,30 @@ async def calculate_trust(request: web.Request) -> web.Response:
     if not session:
         return error_response(ErrorCode.UNAUTHORIZED, "Invalid session", 401)
 
-    # Build trust graph
+    # Load the delegations reachable from this identity, breadth first
     graph = TrustGraph(my_identity=session.identity)
+    frontier, seen = [session.identity], {session.identity}
+    for _ in range(max_depth):
+        next_frontier: list[str] = []
+        for identity in frontier:
+            for d in storage.get_trust_delegations(identity):
+                graph.add_delegation(TrustDelegation.from_dict(d))
+                if d["to_identity"] not in seen:
+                    seen.add(d["to_identity"])
+                    next_frontier.append(d["to_identity"])
+        frontier = next_frontier
 
-    # Load delegations (would need to traverse, simplified here)
-    delegations = storage.get_trust_delegations(session.identity)
-    for d in delegations:
-        graph.add_delegation(TrustDelegation.from_dict(d))
-
-    # Load assertions about subject
-    assertions = storage.get_trust_assertions(subject)
-    for a in assertions:
-        graph.add_assertion(IdentityAssertion.from_dict(a))
-
-    # Calculate
-    result = graph.calculate_trust(subject, max_depth)
+    result = graph.calculate_trust(subject, claim_type, max_depth)
 
     return web.json_response(
         TrustCalculationResponse(
             subject=result.subject,
-            claimed_name=result.claimed_name,
+            claim_type=result.claim_type,
             trust_score=result.trust_score,
-            is_contested=result.is_contested,
             paths=[
-                {
-                    "hops": p.hops,
-                    "weights": p.weights,
-                    "combined_score": p.combined_score,
-                }
+                {"hops": p.hops, "weights": p.weights, "combined_score": p.combined_score}
                 for p in result.paths
             ],
-            assertions=[a.to_dict() for a in result.assertions],
         ).to_dict()
     )
 
@@ -1091,6 +1039,13 @@ def setup_routes(app: web.Application) -> None:
     app.router.add_get("/api/session", get_session)
     app.router.add_delete("/api/session", delete_session)
 
+    # Native SSO routes (challenge / verify / login)
+    setup_native_auth_routes(app)
+
+    # Claims and attestations
+    setup_claims_routes(app)
+    setup_verifier_routes(app)
+
     # Recovery routes
     app.router.add_post("/api/identities/{hash}/recovery/initiate", initiate_recovery)
     app.router.add_post("/api/identities/{hash}/recovery/{id}/sign", submit_recovery_signature)
@@ -1098,8 +1053,6 @@ def setup_routes(app: web.Application) -> None:
     app.router.add_get("/api/identities/{hash}/recovery/pending", list_pending_recoveries)
 
     # Trust routes
-    app.router.add_post("/api/trust/assertions", create_assertion)
-    app.router.add_get("/api/trust/assertions", list_assertions)
     app.router.add_post("/api/trust/delegations", create_delegation)
     app.router.add_get("/api/trust/delegations", list_delegations)
     app.router.add_get("/api/trust/calculate/{hash}", calculate_trust)

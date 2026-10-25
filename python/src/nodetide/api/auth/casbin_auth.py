@@ -167,21 +167,17 @@ def verify_identity_signature(
     Returns:
         True if signature is valid
     """
-    from nodetide.core.identity import Sigchain
-
     # Check timestamp freshness
     now = int(time.time())
     if abs(now - timestamp) > MAX_TIMESTAMP_AGE:
         logger.debug(f"Timestamp too old or in future: {timestamp}")
         return False
 
-    # Load sigchain for identity
-    events = storage.get_sigchain(identity_hash)
-    if not events:
+    # Load sigchain for identity (storage returns a Sigchain, not raw events)
+    sigchain = storage.get_sigchain(identity_hash)
+    if not sigchain:
         logger.debug(f"Identity not found: {identity_hash}")
         return False
-
-    sigchain = Sigchain.from_events(events)
 
     # Build the signed message
     message = f"auth:{identity_hash}:{timestamp}"

@@ -975,56 +975,17 @@
       <div class="grid grid-2" x-show="targetIdentity">
         <div class="card">
           <div class="card-header">
-            <span class="card-title">Assert Identity</span>
-          </div>
-          <div class="form-group">
-            <label>Name</label>
-            <input type="text" x-model="assertForm.name" placeholder="What is this identity's name?">
-          </div>
-          <div class="form-group">
-            <label>Confidence: <span x-text="assertForm.confidence"></span></label>
-            <input type="range" min="-1" max="1" step="0.1" x-model.number="assertForm.confidence">
-          </div>
-          <button class="btn" @click="assertName" :disabled="loading">Create Assertion</button>
-        </div>
-
-        <div class="card">
-          <div class="card-header">
-            <span class="card-title">Delegate Trust</span>
+            <span class="card-title">Trust as an attester</span>
           </div>
           <div class="form-group">
             <label>Weight: <span x-text="delegateForm.weight"></span></label>
             <input type="range" min="0" max="1" step="0.1" x-model.number="delegateForm.weight">
           </div>
           <div class="form-group">
-            <label>Scope</label>
-            <select x-model="delegateForm.scope">
-              <option value="identity">Identity Assertions</option>
-              <option value="content">Content Trust</option>
-              <option value="all">All</option>
-            </select>
+            <label>Claim types (optional)</label>
+            <input type="text" x-model="delegateForm.scope" placeholder="e.g. legal_name, email (empty = all)">
           </div>
           <button class="btn" @click="delegate" :disabled="loading">Create Delegation</button>
-        </div>
-
-        <div class="card">
-          <div class="card-header">
-            <span class="card-title">Identity Assertions</span>
-          </div>
-          <template x-if="assertions.length === 0">
-            <p class="text-muted">No assertions found.</p>
-          </template>
-          <template x-for="a in assertions">
-            <div class="identity-item">
-              <div class="identity-info">
-                <div class="identity-name" x-text="a.name"></div>
-                <div class="text-small">
-                  Confidence: <span x-text="a.confidence"></span>
-                  &bull; By: <span class="identity-hash" x-text="a.asserter?.slice(0, 8) + '...'"></span>
-                </div>
-              </div>
-            </div>
-          </template>
         </div>
 
         <div class="card">
@@ -1039,7 +1000,7 @@
               <div class="identity-info">
                 <div>Weight: <span x-text="d.weight"></span></div>
                 <div class="text-small">
-                  Scope: <span x-text="d.scope"></span>
+                  Scope: <span x-text="d.scope ? d.scope.join(', ') : 'all claim types'"></span>
                   &bull; From: <span class="identity-hash" x-text="d.from?.slice(0, 8) + '...'"></span>
                 </div>
               </div>

@@ -16,8 +16,8 @@ RUN go mod download
 # Copy web client for embedding
 COPY web/ ./web/
 
-# Copy source code
-COPY golang/*.go ./
+# Copy source code (main package plus subpackages such as auth/)
+COPY golang/ ./
 
 # Build
 RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o nodetide .

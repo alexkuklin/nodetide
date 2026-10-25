@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="color-scheme" content="dark light">
+  <title>Nodetide Explorer</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="stylesheet" href="/explorer/explorer.css">
+  <script defer src="/explorer/explorer.js"></script>
+</head>
+<body>
+  <header class="top">
+    <div class="wrap top-inner">
+      <a class="brand" href="#/">Nodetide <span>Explorer</span></a>
+      <nav class="nav" aria-label="Sections">
+        <a href="#/identities" data-nav="identities">Identities</a>
+        <a href="#/events" data-nav="events">Events</a>
+        <a href="#/messages" data-nav="messages">Messages</a>
+        <a href="#/attestations" data-nav="attestations">Attestations</a>
+        <a href="#/trust" data-nav="trust">Trust</a>
+        <a href="#/network" data-nav="network">Network</a>
+      </nav>
+      <form id="search-form" class="search" role="search" autocomplete="off">
+        <input id="search-input" type="search" maxlength="100"
+               placeholder="Search name, identity, event or message hash"
+               aria-label="Search">
+        <button type="submit">Search</button>
+      </form>
+    </div>
+  </header>
+
+  <main id="main" class="wrap" aria-live="polite">
+    <p class="muted">Loading…</p>
+  </main>
+
+  <footer class="wrap foot">
+    <span id="node-info" class="muted"></span>
+    <form id="node-form" class="node-form" autocomplete="off">
+      <label for="node-input" class="muted">Browse another node</label>
+      <input id="node-input" type="url" placeholder="https://node.example.org" maxlength="200">
+      <button type="submit">Go</button>
+      <button type="button" id="node-reset" hidden>This node</button>
+    </form>
+  </footer>
+
+  <noscript><p class="wrap">The explorer needs JavaScript.</p></noscript>
+</body>
+</html>

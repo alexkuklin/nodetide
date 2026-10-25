@@ -12,10 +12,8 @@ from nodetide.core.crypto import KeyPair
 from nodetide.core.identity import Identity, IdentityType, DeviceCapability
 from nodetide.core.storage import Storage
 from nodetide.core.trust import (
-    IdentityAssertion,
     TrustDelegation,
     TrustGraph,
-    VerificationLevel,
 )
 from nodetide.content.mime import create_text_message
 
@@ -37,6 +35,11 @@ def cli():
     """Nodetide - Distributed identity and messaging."""
     pass
 
+
+from nodetide.cli.claims import claim as claim_group, eid as eid_group  # noqa: E402
+
+cli.add_command(claim_group)
+cli.add_command(eid_group)
 
 # Identity commands
 
@@ -464,54 +467,16 @@ def trust():
     pass
 
 
-@trust.command("assert")
-@click.argument("identity_hash")
-@click.option("--name", "-n", help="Claimed name for the identity")
-@click.option("--confidence", "-c", type=float, default=0.8, help="Confidence level (-1.0 to 1.0)")
-@click.option("--verification", "-v", type=click.Choice(["in_person", "video", "vouched", "social_proof", "claimed"]), default="claimed")
-@click.option("--note", help="Optional note")
-def trust_assert(identity_hash: str, name: str | None, confidence: float, verification: str, note: str | None):
-    """Assert identity of someone."""
-    storage = get_storage()
-    ident = get_default_identity(storage)
-
-    if not ident:
-        click.echo("No default identity. Create one first.")
-        return
-
-    assertion = IdentityAssertion.create(
-        keypair=ident.local_keypair,
-        asserter_identity=ident.identity_hash,
-        subject=identity_hash,
-        claimed_name=name,
-        verification=VerificationLevel(verification),
-        confidence=confidence,
-        note=note,
-    )
-
-    storage.save_trust_assertion(
-        asserter_identity=assertion.asserter,
-        subject_identity=assertion.subject,
-        confidence=assertion.confidence,
-        timestamp=assertion.timestamp,
-        signature=assertion.signature,
-        claimed_name=assertion.claimed_name,
-        verification=assertion.verification.value,
-        note=assertion.note,
-    )
-    storage.close()
-
-    click.echo(f"Asserted: {identity_hash[:16]}... is {name or '(unnamed)'}")
-    click.echo(f"Confidence: {confidence}, Verification: {verification}")
-
-
 @trust.command("delegate")
 @click.argument("identity_hash")
 @click.option("--weight", "-w", type=float, default=0.5, help="Trust weight (0.0 to 1.0)")
 @click.option("--depth", "-d", type=int, help="Maximum delegation depth")
-def trust_delegate(identity_hash: str, weight: float, depth: int | None):
-    """Delegate trust to someone."""
+@click.option("--scope", "-s", help="Comma-separated claim types this covers (default: all)")
+def trust_delegate(identity_hash: str, weight: float, depth: int | None, scope: str | None):
+    """Trust someone to issue attestations (e.g. verify legal names)."""
     import time
+
+    scope_list = [t.strip() for t in scope.split(",") if t.strip()] if scope else None
 
     storage = get_storage()
     ident = get_default_identity(storage)
@@ -526,16 +491,19 @@ def trust_delegate(identity_hash: str, weight: float, depth: int | None):
         weight=weight,
         timestamp=int(time.time()),
         depth_limit=depth,
+        scope=scope_list,
     )
     storage.close()
 
-    click.echo(f"Delegated trust to {identity_hash[:16]}... with weight {weight}")
+    covers = ", ".join(scope_list) if scope_list else "all claim types"
+    click.echo(f"Delegated trust to {identity_hash[:16]}... with weight {weight} for {covers}")
 
 
 @trust.command("show")
 @click.argument("identity_hash")
-def trust_show(identity_hash: str):
-    """Show trust information for an identity."""
+@click.option("--claim-type", "-c", help="Only consider this claim type")
+def trust_show(identity_hash: str, claim_type: str | None):
+    """Show how much you trust an identity to issue attestations."""
     storage = get_storage()
     ident = get_default_identity(storage)
 
@@ -543,34 +511,26 @@ def trust_show(identity_hash: str):
         click.echo("No default identity.")
         return
 
-    # Get assertions about this identity
-    assertions = storage.get_trust_assertions(identity_hash)
-
-    # Get delegations from us
-    delegations = storage.get_trust_delegations(ident.identity_hash)
-
+    graph = TrustGraph(my_identity=ident.identity_hash)
+    frontier, seen = [ident.identity_hash], {ident.identity_hash}
+    for _ in range(3):
+        next_frontier = []
+        for identity in frontier:
+            for d in storage.get_trust_delegations(identity):
+                graph.add_delegation(TrustDelegation.from_dict(d))
+                if d["to_identity"] not in seen:
+                    seen.add(d["to_identity"])
+                    next_frontier.append(d["to_identity"])
+        frontier = next_frontier
     storage.close()
 
-    click.echo(f"Trust info for: {identity_hash[:16]}...")
-
-    if assertions:
-        click.echo("\nAssertions:")
-        for a in assertions:
-            name = a.get("claimed_name") or "(unnamed)"
-            conf = a["confidence"]
-            verif = a["verification"]
-            click.echo(f"  {a['asserter_identity'][:12]}... says: {name} (conf={conf}, verif={verif})")
-
-    my_delegation = None
-    for d in delegations:
-        if d["to_identity"] == identity_hash:
-            my_delegation = d
-            break
-
-    if my_delegation:
-        click.echo(f"\nYour delegation: weight={my_delegation['weight']}")
-    else:
-        click.echo("\nNo delegation from you")
+    result = graph.calculate_trust(identity_hash, claim_type)
+    click.echo(f"Trust in {identity_hash[:16]}...: {result.trust_score:.2f}")
+    for path in result.paths:
+        hops = " -> ".join(h[:8] for h in path.hops)
+        click.echo(f"  {hops}  ({path.combined_score:.2f})")
+    if not result.paths:
+        click.echo("  No delegation path from you")
 
 
 # Message commands
@@ -847,22 +807,15 @@ GET /identities/{hash}/recovery/pending
 TRUST ENDPOINTS
 ---------------
 
-POST /trust/assertions
-  Create trust assertion (requires signature in body)
-  Body: {"assertion": {signed assertion}}
-
-GET /trust/assertions?subject={hash}
-  Get assertions about an identity
-
 POST /trust/delegations
   Create trust delegation (requires Bearer token)
-  Body: {"delegation": {...}}
+  Body: {"delegation": {"from_identity", "to_identity", "weight", "scope"?, "depth_limit"?}}
 
 GET /trust/delegations?from={hash}
   Get delegations from an identity
 
-GET /trust/calculate/{hash}
-  Calculate transitive trust (requires Bearer token)
+GET /trust/calculate/{hash}?claim_type=
+  Trust in an attestation issuer via delegation paths (requires Bearer token)
 
 QUERY ENDPOINTS
 ---------------

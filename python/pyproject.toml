@@ -27,9 +27,14 @@ dependencies = [
     "pydantic>=2.0",
     "casbin>=1.30",
     "pyjwt>=2.8",
+    "asn1crypto>=1.5",
+    "pyhanko-certvalidator>=0.26",
 ]
 
 [project.optional-dependencies]
+eid = [
+    "PyKCS11>=1.5",  # sign claim statements with a PKCS#11 eID token
+]
 dev = [
     "pytest>=7.0",
     "pytest-asyncio>=0.21",

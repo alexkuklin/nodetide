@@ -164,45 +164,10 @@ def get_required_capability(event_type: str) -> str | None:
         "revoke_device": DeviceCapability.SIGN_IDENTITY.value,
         "rotate_master": None,  # master key only
         "set_recovery": None,   # master key only
+        "add_claim": DeviceCapability.MANAGE_CLAIMS.value,
+        "revoke_claim": DeviceCapability.MANAGE_CLAIMS.value,
     }
     return capability_map.get(event_type)
-
-
-def verify_assertion_signature(
-    assertion: dict[str, Any],
-    asserter_sigchain: Sigchain,
-) -> tuple[bool, str | None]:
-    """Verify a trust assertion's signature.
-
-    Returns (is_valid, error_message).
-    """
-    signature = assertion.get("signature")
-    asserter = assertion.get("asserter")
-
-    if not signature:
-        return False, "Missing signature"
-
-    # Build signable dict
-    signable = {k: v for k, v in assertion.items() if k != "signature"}
-    signable_json = json.dumps(signable, sort_keys=True, separators=(",", ":"))
-
-    # Get valid signing keys for asserter
-    current_master = asserter_sigchain.get_current_master_key()
-    active_devices = asserter_sigchain.get_active_devices()
-
-    valid_keys = [current_master] if current_master else []
-    valid_keys.extend(d.pubkey for d in active_devices)
-
-    # Try each valid key
-    for key_hex in valid_keys:
-        try:
-            verify_key = VerifyKey.from_hex(key_hex)
-            if verify_key.verify_hex(signable_json.encode("utf-8"), signature):
-                return True, None
-        except Exception:
-            continue
-
-    return False, "Signature verification failed"
 
 
 def verify_session_request(

@@ -1,0 +1,153 @@
+"""OIDC bridge configuration.
+
+Environment:
+    NODETIDE_OIDC_ISSUER           public https origin of this node (enables the bridge)
+    NODETIDE_OIDC_CLIENTS_FILE     JSON file listing registered relying parties
+    NODETIDE_OIDC_KEY_FILE         RSA signing key (PEM); created if missing
+    NODETIDE_SEED_NODES            comma-separated node URLs to ask for unknown identities
+    NODETIDE_FETCH_ALLOW_PRIVATE   "1" to let the fetcher contact private/loopback addresses
+
+Clients file:
+    [{"client_id": "grafana", "name": "Grafana",
+      "redirect_uris": ["https://grafana.example.com/login/generic_oauth"],
+      "client_secret_sha256": "<sha256 hex of the secret>"}]   # omit for public clients
+"""
+
+from __future__ import annotations
+
+import hashlib
+import hmac
+import json
+import os
+from dataclasses import dataclass, field
+from pathlib import Path
+from urllib.parse import urlsplit
+
+LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
+
+
+class ConfigError(ValueError):
+    """Invalid OIDC bridge configuration."""
+
+
+def _is_secure_url(url: str) -> bool:
+    """https, or http on a loopback host (development)."""
+    parts = urlsplit(url)
+    if not parts.hostname:
+        return False
+    if parts.scheme == "https":
+        return True
+    return parts.scheme == "http" and parts.hostname in LOOPBACK_HOSTS
+
+
+@dataclass(frozen=True)
+class OIDCClient:
+    """A registered relying party."""
+
+    client_id: str
+    name: str
+    redirect_uris: tuple[str, ...]
+    secret_sha256: str | None = None  # None => public client (PKCE required)
+
+    @property
+    def is_public(self) -> bool:
+        return self.secret_sha256 is None
+
+    def check_secret(self, secret: str | None) -> bool:
+        """Constant-time client secret check. Public clients have no secret."""
+        if self.secret_sha256 is None:
+            return True
+        if not secret:
+            return False
+        digest = hashlib.sha256(secret.encode("utf-8")).hexdigest()
+        return hmac.compare_digest(digest, self.secret_sha256.lower())
+
+
+@dataclass
+class OIDCConfig:
+    issuer: str
+    clients: dict[str, OIDCClient]
+    key_file: Path | None = None
+    seed_nodes: list[str] = field(default_factory=list)
+    allow_private_fetch: bool = False
+    attempt_lifetime: int = 900  # how long a sign-in page stays usable
+    code_lifetime: int = 120
+    id_token_lifetime: int = 600
+    access_token_lifetime: int = 3600
+
+    def __post_init__(self) -> None:
+        self.issuer = self.issuer.rstrip("/")
+        if not _is_secure_url(self.issuer):
+            raise ConfigError("issuer must be an https URL (or http on localhost)")
+        parts = urlsplit(self.issuer)
+        if parts.query or parts.fragment:
+            raise ConfigError("issuer must not contain a query or fragment")
+
+    @classmethod
+    def load_clients(cls, path: str | Path) -> dict[str, OIDCClient]:
+        try:
+            raw = json.loads(Path(path).read_text())
+        except (OSError, json.JSONDecodeError) as e:
+            raise ConfigError(f"Cannot read clients file {path}: {e}") from e
+        if not isinstance(raw, list):
+            raise ConfigError("clients file must contain a JSON list")
+
+        clients: dict[str, OIDCClient] = {}
+        for entry in raw:
+            if not isinstance(entry, dict):
+                raise ConfigError("each client must be an object")
+            client_id = entry.get("client_id")
+            uris = entry.get("redirect_uris")
+            if not isinstance(client_id, str) or not client_id:
+                raise ConfigError("client_id is required")
+            if client_id in clients:
+                raise ConfigError(f"duplicate client_id {client_id}")
+            if not isinstance(uris, list) or not uris or not all(isinstance(u, str) for u in uris):
+                raise ConfigError(f"{client_id}: redirect_uris must be a non-empty list")
+            for uri in uris:
+                if not _is_secure_url(uri) or urlsplit(uri).fragment:
+                    raise ConfigError(f"{client_id}: insecure or invalid redirect_uri {uri}")
+            secret = entry.get("client_secret_sha256")
+            if secret is not None and (
+                not isinstance(secret, str) or len(secret) != 64
+                or any(c not in "0123456789abcdefABCDEF" for c in secret)
+            ):
+                raise ConfigError(f"{client_id}: client_secret_sha256 must be 64 hex chars")
+            clients[client_id] = OIDCClient(
+                client_id=client_id,
+                name=str(entry.get("name") or client_id),
+                redirect_uris=tuple(uris),
+                secret_sha256=secret,
+            )
+        return clients
+
+    @classmethod
+    def from_env(
+        cls,
+        issuer: str | None = None,
+        default_key_dir: Path | None = None,
+    ) -> OIDCConfig | None:
+        """Build config from the environment. Returns None if no issuer is set."""
+        issuer = issuer or os.environ.get("NODETIDE_OIDC_ISSUER")
+        if not issuer:
+            return None
+
+        clients_file = os.environ.get("NODETIDE_OIDC_CLIENTS_FILE")
+        clients = cls.load_clients(clients_file) if clients_file else {}
+
+        key_file = os.environ.get("NODETIDE_OIDC_KEY_FILE")
+        if key_file:
+            key_path: Path | None = Path(key_file)
+        elif default_key_dir is not None:
+            key_path = default_key_dir / "oidc_signing_key.pem"
+        else:
+            key_path = None
+
+        seeds = [s.strip() for s in os.environ.get("NODETIDE_SEED_NODES", "").split(",") if s.strip()]
+        return cls(
+            issuer=issuer,
+            clients=clients,
+            key_file=key_path,
+            seed_nodes=seeds,
+            allow_private_fetch=os.environ.get("NODETIDE_FETCH_ALLOW_PRIVATE") == "1",
+        )

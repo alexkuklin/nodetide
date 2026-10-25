@@ -10,8 +10,20 @@ from pathlib import Path
 from aiohttp import web
 
 from nodetide.core.storage import Storage
+from nodetide.oidc import OIDCConfig, setup_oidc
+from nodetide.oidc.fetcher import FetchFn
+from nodetide.explorer import explorer_enabled, setup_explorer_api, setup_explorer_ui
+from nodetide.eidas.verify import EidasPolicy, policy_from_env as eidas_policy_from_env, register as register_eidas
+from nodetide.verifiers import EmailVerifier
+from nodetide.verifiers.config import build_email_verifier
 from nodetide.api.routes import setup_routes
-from nodetide.api.auth import SessionStore, RecoveryStore, setup_casbin_auth, casbin_middleware
+from nodetide.api.auth import (
+    ChallengeStore,
+    SessionStore,
+    RecoveryStore,
+    setup_casbin_auth,
+    casbin_middleware,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -30,15 +42,22 @@ async def cleanup_task(app: web.Application) -> None:
     """Background task to cleanup expired sessions and recoveries."""
     session_store: SessionStore = app["session_store"]
     recovery_store: RecoveryStore = app["recovery_store"]
+    challenge_store: ChallengeStore = app["challenge_store"]
 
     while True:
         await asyncio.sleep(60)  # Run every minute
 
         sessions_cleaned = session_store.cleanup_expired()
         recoveries_cleaned = recovery_store.cleanup_expired()
+        challenges_cleaned = challenge_store.cleanup_expired()
+        if app.get("email_verifier") is not None:
+            app["email_verifier"].cleanup()
 
-        if sessions_cleaned or recoveries_cleaned:
-            logger.debug(f"Cleanup: {sessions_cleaned} sessions, {recoveries_cleaned} recoveries")
+        if sessions_cleaned or recoveries_cleaned or challenges_cleaned:
+            logger.debug(
+                f"Cleanup: {sessions_cleaned} sessions, {recoveries_cleaned} recoveries, "
+                f"{challenges_cleaned} challenges"
+            )
 
 
 async def on_startup(app: web.Application) -> None:
@@ -87,6 +106,11 @@ def create_app(
     poll_interval: int = 300,
     mdns: bool = False,
     port: int = 4557,
+    auth_audience: str | None = None,
+    oidc_config: OIDCConfig | None = None,
+    oidc_fetch: FetchFn | None = None,
+    email_verifier: EmailVerifier | None = None,
+    eidas_policy: EidasPolicy | None = None,
 ) -> web.Application:
     """Create the API application.
 
@@ -98,6 +122,11 @@ def create_app(
         poll_interval: Polling interval in seconds (default 300)
         mdns: Enable mDNS announcement for relay discovery
         port: Port number for mDNS announcement
+        auth_audience: Origin this node accepts logins for (or NODETIDE_AUTH_AUDIENCE)
+        oidc_config: Enable the OIDC bridge (default: from NODETIDE_OIDC_* environment)
+        oidc_fetch: Override how the bridge fetches unknown identities (tests)
+        email_verifier: Enable email claim verification (default: from NODETIDE_EMAIL_* environment)
+        eidas_policy: Accept eIDAS qualified-signature proofs (default: NODETIDE_EIDAS_ANCHORS)
 
     Returns:
         Configured aiohttp Application
@@ -121,6 +150,11 @@ def create_app(
     # Setup stores
     app["session_store"] = SessionStore()
     app["recovery_store"] = RecoveryStore()
+    app["challenge_store"] = ChallengeStore()
+
+    # Origin this node authenticates users for (native SSO login). Required for
+    # POST /api/auth/login; challenges for other audiences are still allowed.
+    app["auth_audience"] = auth_audience or os.environ.get("NODETIDE_AUTH_AUDIENCE")
 
     # Setup relay poller if in relay mode
     relay_mode = relay_mode or os.environ.get("NODETIDE_RELAY_MODE") == "1"
@@ -144,6 +178,39 @@ def create_app(
 
     # Setup API routes
     setup_routes(app)
+
+    # eIDAS qualified-signature proofs, judged against operator-supplied trust anchors.
+    if eidas_policy is None:
+        eidas_policy = eidas_policy_from_env()
+    if eidas_policy is not None:
+        register_eidas(eidas_policy)
+        app["eidas_policy"] = eidas_policy
+        logger.info(f"eIDAS proof verification enabled ({len(eidas_policy.store.anchors)} trust anchors)")
+
+    # Claim verification (email). Needs the node's audience for key-control proofs.
+    if email_verifier is None:
+        email_verifier = build_email_verifier(app["storage"], app["auth_audience"])
+    if email_verifier is not None:
+        app["email_verifier"] = email_verifier
+        logger.info(f"Email verification enabled (issuer={email_verifier.issuer.identity_hash[:16]}...)")
+
+    # Explorer: read-only browsing of public information. The API is served in
+    # every mode (including relay); the UI whenever a web root is configured.
+    if explorer_enabled():
+        setup_explorer_api(app)
+        explorer_web_root = web_root or os.environ.get("NODETIDE_WEB_ROOT")
+        if explorer_web_root and setup_explorer_ui(app, explorer_web_root):
+            logger.info("Explorer UI available at /explorer")
+
+    # OIDC bridge (registered before on_cleanup below so its fetcher stops
+    # before storage is closed)
+    if oidc_config is None:
+        db_file = app["storage"].db_path
+        key_dir = None if db_file.name == ":memory:" else db_file.parent
+        oidc_config = OIDCConfig.from_env(default_key_dir=key_dir)
+    if oidc_config is not None:
+        setup_oidc(app, oidc_config, app["storage"], fetch=oidc_fetch)
+        logger.info(f"OIDC bridge enabled (issuer={oidc_config.issuer})")
 
     # Setup lifecycle hooks
     app.on_startup.append(on_startup)

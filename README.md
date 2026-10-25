@@ -10,7 +10,7 @@ Nodetide is a decentralized identity system built on cryptographic sigchains. It
 - **Sigchain-based verification**: All identity operations are cryptographically linked
 - **Multi-device support**: Add/revoke devices with full audit trail
 - **Social recovery**: Recover access through trusted contacts
-- **Trust network**: Web-of-trust style identity assertions
+- **Claims and attestations**: Holders make claims (email, phone, legal name); issuers attest them; relying parties decide whom to trust
 - **DTN Transport**: Pluggable convergence layer adapters for delay-tolerant networks
 
 ## Architecture
@@ -94,8 +94,7 @@ Nodetide identity add-device --label "Phone"
 Nodetide identity set-recovery --trustees A,B,C --threshold 2
 
 # Trust assertions
-Nodetide trust assert IDENTITY --name "Bob" --confidence 0.9
-Nodetide trust delegate IDENTITY --weight 0.8
+Nodetide trust delegate IDENTITY --weight 0.8 [--scope legal_name,email]
 Nodetide trust show IDENTITY
 
 # Messaging
@@ -129,6 +128,95 @@ All implementations expose the same REST API:
 | GET | `/api/session` | Check session status |
 | DELETE | `/api/session` | Invalidate session |
 
+### Native SSO
+
+Challenge/response login for third-party services. See "Authentication (SSO)" in [identity-system.md](identity-system.md).
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/auth/challenge` | Issue an `AUTH_REQUEST` (nonce bound to an audience) |
+| POST | `/api/auth/verify` | Verify an `AUTH_ASSERTION`; body `{assertion, sigchain?}` |
+| POST | `/api/auth/login` | Verify an assertion for this node and open a session (Python only) |
+
+- `NODETIDE_AUTH_AUDIENCE` sets this node's own origin: the default `aud` for challenges and the only audience `login` accepts.
+- Only device keys holding the `authenticate` capability can sign assertions; the master key cannot.
+- The Go node has no identity store yet, so `sigchain` is required on `verify` there and `login` is not available.
+- `/api/session` and `/api/auth/token` predate this flow (no audience, no nonce) and are kept for existing clients.
+
+### Claims and attestations
+
+An identity can make **claims** about itself (`email`, `phone`, `legal_name`); third parties issue **attestations** that they verified a claim; whoever relies on a claim decides whom to trust. Only a salted commitment goes on the sigchain, so claim values never become public unless the holder publishes them. Full design: "Claims and Attestations" in [identity-system.md](identity-system.md).
+
+```bash
+nodetide claim add --type legal_name --given Maria --family Ivanova   # value stays in ~/.nodetide/claims/
+nodetide claim list
+nodetide claim revoke CLAIM_ID
+```
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/identities/{hash}/claims` | Claims on the chain, attestations, published values (if any) |
+| POST | `/api/claims/documents` | Publish or unpublish a claim's value (signed by the holder) |
+| POST | `/api/attestations` | Store an issuer-signed attestation |
+| GET | `/api/attestations?subject=&claim_id=&issuer=` | Query attestations |
+| POST | `/api/attestations/revocations` | Issuer withdraws an attestation |
+| POST | `/api/claims/verify` | Stateless check of any attestation, optionally against a disclosed value |
+
+**Email verification** (assurance `low`): enable with `NODETIDE_EMAIL_VERIFIER=1`, `NODETIDE_AUTH_AUDIENCE`, `NODETIDE_SMTP_HOST` (+ `_PORT`, `_USER`, `_PASSWORD`, `_SECURITY=starttls|ssl|none`), `NODETIDE_EMAIL_FROM` and optionally `NODETIDE_ISSUER_NAME`. For development `NODETIDE_EMAIL_DEV_LOG=1` logs codes instead of sending mail. The node creates its own issuer identity (`GET /api/verify/issuer`). Flow: `POST /api/auth/challenge`, sign an assertion whose claims are `{"purpose": "claim_verification", "claim_id": ...}`, `POST /api/verify/email/start` with the claim document, then `POST /api/verify/email/confirm` with the emailed code.
+
+**eID / qualified e-signature** (assurance up to `high`): the holder signs a statement with an electronic signature made with a qualified certificate; relying parties check it against CA certificates they trust (`NODETIDE_EIDAS_ANCHORS=<directory of PEM/DER CA certificates>`, `NODETIDE_EIDAS_REVOCATION=hard-fail|soft-fail|off`).
+
+```bash
+# with the signing application your eID provider gives you:
+nodetide eid statement CLAIM_ID                 # writes statement-<id>.txt, sign it as detached CAdES (.p7s)
+nodetide eid attach CLAIM_ID statement-<id>.txt statement-<id>.txt.p7s
+
+# or straight from a PKCS#11 token (pip install 'nodetide[eid]'); the PIN is only ever typed at the prompt:
+nodetide eid tokens
+nodetide eid sign CLAIM_ID
+
+nodetide eid chain attestation-<id>.json        # which CAs signed it
+nodetide eid verify attestation-<id>.json --anchors DIR --document claim.json
+```
+
+An attestation made this way **contains your certificate, with personal identifiers**. Nodes refuse to store or publish it; give it only to the party you want to prove the claim to.
+
+### Explorer
+
+A read-only, block-explorer-style view of the public information a node knows: identities and their sigchains (keys, devices, recovery trustees, every event), public messages with signature checks, trust delegations, and relay subscriptions.
+
+- **UI:** `/explorer` on any node that serves the web client. Search by name or by the start of an identity, event or message hash.
+- **Another node:** `/explorer/?node=https://relay.example.org` browses that node's API instead (it allows cross-origin reads). Use this for relays, whose image ships no web files.
+- **API:** `GET /api/explorer/{stats,identities,identities/{hash},events,events/{hash},messages,messages/{hash},trust/delegations,search,network}`; lists take `limit` (max 100) and `offset`.
+- **Never shown:** private keys, sessions, recovery requests in progress, challenges, and any message that is not public.
+- **Messages from other nodes are not verified when stored,** so the explorer checks each public message's signature against the sender's current keys when you open it.
+- **Switch it off** with `NODETIDE_EXPLORER=0`. Existing databases are indexed automatically on first start.
+- The Go node serves the UI but has no explorer API yet, so the page says so.
+
+### OIDC Bridge (Python)
+
+Lets any Nodetide identity sign in to standard OIDC applications (Keycloak-style authorization-code flow with PKCE, RS256 `id_token`). Disabled unless `NODETIDE_OIDC_ISSUER` is set.
+
+| Variable | Purpose |
+|----------|---------|
+| `NODETIDE_OIDC_ISSUER` | Public https origin of this node, e.g. `https://dblog.kuklin.eu` (enables the bridge) |
+| `NODETIDE_OIDC_CLIENTS_FILE` | JSON list of registered applications (see below) |
+| `NODETIDE_OIDC_KEY_FILE` | RSA signing key; defaults to `oidc_signing_key.pem` beside the database and is created on first start |
+| `NODETIDE_SEED_NODES` | Comma-separated node URLs asked for identities this node doesn't know |
+| `NODETIDE_FETCH_ALLOW_PRIVATE` | `1` to let the fetcher reach private/loopback addresses (LAN or development only) |
+
+Clients file (omit `client_secret_sha256` for public clients, which must use PKCE; PKCE is accepted for all):
+
+```json
+[{"client_id": "grafana", "name": "Grafana",
+  "redirect_uris": ["https://grafana.example.com/login/generic_oauth"],
+  "client_secret_sha256": "<sha256 hex of the secret>"}]
+```
+
+Point the application at `https://<issuer>/.well-known/openid-configuration`. Endpoints: `/oidc/authorize`, `/oidc/token`, `/oidc/userinfo`, `/oidc/jwks.json`. The `sub` claim is the identity hash.
+
+Identities the node doesn't know yet are fetched in the background and the user sees a "failed for now, try again later" message; see "Authentication (SSO)" in [identity-system.md](identity-system.md). Run a single instance: attempts, codes and tokens are held in memory.
+
 ### Recovery
 
 | Method | Endpoint | Description |
@@ -142,11 +230,9 @@ All implementations expose the same REST API:
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| POST | `/api/trust/assertions` | Create identity assertion |
-| GET | `/api/trust/assertions?subject={hash}` | Query assertions |
 | POST | `/api/trust/delegations` | Create trust delegation |
 | GET | `/api/trust/delegations?from={hash}` | Query delegations |
-| GET | `/api/trust/calculate/{hash}` | Calculate transitive trust |
+| GET | `/api/trust/calculate/{hash}?claim_type=` | Trust in an attestation issuer via delegation paths |
 
 ### Utilities
 

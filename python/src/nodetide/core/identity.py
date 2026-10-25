@@ -35,6 +35,8 @@ class EventType(str, Enum):
     SOCIAL_RECOVERY = "social_recovery"
     RESOLVE_FORK = "resolve_fork"
     SET_DISTRIBUTION = "set_distribution"
+    ADD_CLAIM = "add_claim"
+    REVOKE_CLAIM = "revoke_claim"
 
 
 class IdentityType(str, Enum):
@@ -52,6 +54,8 @@ class DeviceCapability(str, Enum):
     SIGN_FILES = "sign_files"
     SIGN_IDENTITY = "sign_identity"
     ENCRYPT = "encrypt"
+    AUTHENTICATE = "authenticate"  # may sign AuthAssertions (SSO login)
+    MANAGE_CLAIMS = "manage_claims"  # may add and revoke this identity's claims
 
 
 @dataclass
@@ -104,6 +108,8 @@ class SigchainEvent:
             EventType.SOCIAL_RECOVERY: SocialRecoveryEvent,
             EventType.RESOLVE_FORK: ResolveForkEvent,
             EventType.SET_DISTRIBUTION: SetDistributionEvent,
+            EventType.ADD_CLAIM: AddClaimEvent,
+            EventType.REVOKE_CLAIM: RevokeClaimEvent,
         }
 
         event_class = event_classes.get(event_type)
@@ -598,6 +604,147 @@ class SetDistributionEvent(SigchainEvent):
         return event
 
 
+@dataclass(kw_only=True)
+class AddClaimEvent(SigchainEvent):
+    """Commit to a claim about this identity. The value itself stays off-chain."""
+
+    claim_id: str
+    claim_type: str
+    commitment: str  # hex hash binding claim_id, type, salt and value
+    expires: int | None = None
+
+    def __post_init__(self):
+        self.type = EventType.ADD_CLAIM
+
+    def to_dict(self) -> dict[str, Any]:
+        d = super().to_dict()
+        d.update({
+            "claim_id": self.claim_id,
+            "claim_type": self.claim_type,
+            "commitment": self.commitment,
+            "expires": self.expires,
+        })
+        return d
+
+    @classmethod
+    def _from_dict(cls, data: dict[str, Any]) -> AddClaimEvent:
+        return cls(
+            type=EventType.ADD_CLAIM,
+            timestamp=data["timestamp"],
+            prev=data["prev"],
+            signature=data["signature"],
+            signed_by=data["signed_by"],
+            version=data.get("version", 1),
+            alg=data.get("alg", DEFAULT_SIGN_ALG),
+            hash_alg=data.get("hash_alg", DEFAULT_HASH_ALG),
+            claim_id=data["claim_id"],
+            claim_type=data["claim_type"],
+            commitment=data["commitment"],
+            expires=data.get("expires"),
+        )
+
+    @classmethod
+    def create(
+        cls,
+        signer: KeyPair | SigningKey,
+        prev_hash: str,
+        claim_id: str,
+        claim_type: str,
+        commitment: str,
+        expires: int | None = None,
+    ) -> AddClaimEvent:
+        """Create and sign an add-claim event (signer: master or manage_claims device)."""
+        event = cls(
+            type=EventType.ADD_CLAIM,
+            timestamp=int(time.time()),
+            prev=prev_hash,
+            signature="",
+            signed_by=signer.verify_key.to_hex(),
+            claim_id=claim_id,
+            claim_type=claim_type,
+            commitment=commitment,
+            expires=expires,
+        )
+        signable = json.dumps(event.signable_dict(), sort_keys=True, separators=(",", ":"))
+        event.signature = signer.sign_hex(signable.encode("utf-8"))
+        return event
+
+
+@dataclass(kw_only=True)
+class RevokeClaimEvent(SigchainEvent):
+    """Withdraw a claim."""
+
+    claim_id: str
+    reason: str | None = None
+
+    def __post_init__(self):
+        self.type = EventType.REVOKE_CLAIM
+
+    def to_dict(self) -> dict[str, Any]:
+        d = super().to_dict()
+        d.update({"claim_id": self.claim_id, "reason": self.reason})
+        return d
+
+    @classmethod
+    def _from_dict(cls, data: dict[str, Any]) -> RevokeClaimEvent:
+        return cls(
+            type=EventType.REVOKE_CLAIM,
+            timestamp=data["timestamp"],
+            prev=data["prev"],
+            signature=data["signature"],
+            signed_by=data["signed_by"],
+            version=data.get("version", 1),
+            alg=data.get("alg", DEFAULT_SIGN_ALG),
+            hash_alg=data.get("hash_alg", DEFAULT_HASH_ALG),
+            claim_id=data["claim_id"],
+            reason=data.get("reason"),
+        )
+
+    @classmethod
+    def create(
+        cls,
+        signer: KeyPair | SigningKey,
+        prev_hash: str,
+        claim_id: str,
+        reason: str | None = None,
+    ) -> RevokeClaimEvent:
+        """Create and sign a revoke-claim event."""
+        event = cls(
+            type=EventType.REVOKE_CLAIM,
+            timestamp=int(time.time()),
+            prev=prev_hash,
+            signature="",
+            signed_by=signer.verify_key.to_hex(),
+            claim_id=claim_id,
+            reason=reason,
+        )
+        signable = json.dumps(event.signable_dict(), sort_keys=True, separators=(",", ":"))
+        event.signature = signer.sign_hex(signable.encode("utf-8"))
+        return event
+
+
+@dataclass
+class ClaimRecord:
+    """A claim as recorded on a sigchain, with its current status."""
+
+    claim_id: str
+    claim_type: str
+    commitment: str
+    created_at: int
+    expires: int | None
+    event_hash: str
+    signed_by: str
+    revoked_at: int | None = None
+    revoke_reason: str | None = None
+
+    def status(self, at_time: int | None = None) -> str:
+        if self.revoked_at is not None:
+            return "revoked"
+        if self.expires and self.expires < (int(time.time()) if at_time is None else at_time):
+            return "expired"
+        return "active"
+
+
 @dataclass
 class DeviceInfo:
     """Information about an active device."""
@@ -721,6 +868,28 @@ class Sigchain:
 
         return active
 
+    def get_claims(self) -> list[ClaimRecord]:
+        """All claims ever made on this chain, in order, with revocation applied."""
+        records: dict[str, ClaimRecord] = {}
+        for event in self.events:
+            if isinstance(event, AddClaimEvent):
+                records[event.claim_id] = ClaimRecord(
+                    claim_id=event.claim_id,
+                    claim_type=event.claim_type,
+                    commitment=event.commitment,
+                    created_at=event.timestamp,
+                    expires=event.expires,
+                    event_hash=event.event_hash(),
+                    signed_by=event.signed_by,
+                )
+            elif isinstance(event, RevokeClaimEvent) and event.claim_id in records:
+                records[event.claim_id].revoked_at = event.timestamp
+                records[event.claim_id].revoke_reason = event.reason
+        return list(records.values())
+
+    def get_claim(self, claim_id: str) -> ClaimRecord | None:
+        return next((c for c in self.get_claims() if c.claim_id == claim_id), None)
+
     def get_recovery_config(self) -> SetRecoveryEvent | None:
         """Get the current recovery configuration."""
         recovery = None
@@ -752,6 +921,10 @@ class Sigchain:
         # Track current master key
         current_master = genesis.pubkey
         prev_hash = genesis.event_hash()
+        # Device keys authorized so far: pubkey -> (capabilities, expires); and revoked keys
+        devices: dict[str, tuple[list[str], int | None]] = {}
+        revoked: set[str] = set()
+        claim_states: dict[str, bool] = {}  # claim_id -> revoked?
 
         # Verify each subsequent event
         for i, event in enumerate(self.events[1:], start=1):
@@ -772,6 +945,32 @@ class Sigchain:
                 # Must be signed by current master
                 if event.signed_by != current_master:
                     return False, f"Event {i}: must be signed by master key"
+                if isinstance(event, AddDeviceEvent):
+                    devices[event.device_pubkey] = (list(event.capabilities or []), event.expires)
+                elif isinstance(event, RevokeDeviceEvent):
+                    revoked.add(event.device_pubkey)
+            elif isinstance(event, (AddClaimEvent, RevokeClaimEvent)):
+                # Master, or a currently valid device with manage_claims
+                if event.signed_by != current_master:
+                    caps, expires = devices.get(event.signed_by, ([], None))
+                    allowed = (
+                        event.signed_by in devices
+                        and event.signed_by not in revoked
+                        and DeviceCapability.MANAGE_CLAIMS.value in caps
+                        and not (expires and expires < event.timestamp)
+                    )
+                    if not allowed:
+                        return False, f"Event {i}: signer may not manage claims"
+                if isinstance(event, AddClaimEvent):
+                    if event.claim_id in claim_states:
+                        return False, f"Event {i}: duplicate claim_id"
+                    claim_states[event.claim_id] = False
+                else:
+                    if event.claim_id not in claim_states:
+                        return False, f"Event {i}: revokes an unknown claim"
+                    if claim_states[event.claim_id]:
+                        return False, f"Event {i}: claim already revoked"
+                    claim_states[event.claim_id] = True
             elif isinstance(event, RotateMasterEvent):
                 # Must be signed by old master
                 if event.signed_by != current_master:
@@ -908,6 +1107,38 @@ class Identity:
             prev_hash=self.sigchain.head_hash,
             distribution_points=distribution_points,
         )
+        self.sigchain.append(event)
+        return event
+
+    def add_claim(
+        self,
+        claim_id: str,
+        claim_type: str,
+        commitment: str,
+        signer: KeyPair | SigningKey | None = None,
+        expires: int | None = None,
+    ) -> AddClaimEvent:
+        """Record a claim commitment (signed by the master key unless `signer` is given)."""
+        signer = signer or self.local_keypair
+        if signer is None:
+            raise ValueError("Cannot add claim: no signing key")
+        event = AddClaimEvent.create(
+            signer, self.sigchain.head_hash, claim_id, claim_type, commitment, expires
+        )
+        self.sigchain.append(event)
+        return event
+
+    def revoke_claim(
+        self,
+        claim_id: str,
+        reason: str | None = None,
+        signer: KeyPair | SigningKey | None = None,
+    ) -> RevokeClaimEvent:
+        """Withdraw a claim."""
+        signer = signer or self.local_keypair
+        if signer is None:
+            raise ValueError("Cannot revoke claim: no signing key")
+        event = RevokeClaimEvent.create(signer, self.sigchain.head_hash, claim_id, reason)
         self.sigchain.append(event)
         return event
 

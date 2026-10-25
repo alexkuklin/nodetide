@@ -40,20 +40,6 @@ CREATE TABLE IF NOT EXISTS sigchains (
     updated_at INTEGER NOT NULL
 );
 
--- Trust assertions
-CREATE TABLE IF NOT EXISTS trust_assertions (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    asserter_identity TEXT NOT NULL,
-    subject_identity TEXT NOT NULL,
-    claimed_name TEXT,
-    verification TEXT,
-    confidence REAL NOT NULL,
-    timestamp INTEGER NOT NULL,
-    note TEXT,
-    signature TEXT NOT NULL,
-    UNIQUE(asserter_identity, subject_identity, timestamp)
-);
-
 -- Trust delegations
 CREATE TABLE IF NOT EXISTS trust_delegations (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -62,6 +48,7 @@ CREATE TABLE IF NOT EXISTS trust_delegations (
     weight REAL NOT NULL,
     depth_limit INTEGER,
     timestamp INTEGER NOT NULL,
+    scope TEXT,  -- JSON list of claim types, NULL = all
     UNIQUE(from_identity, to_identity)
 );
 
@@ -143,12 +130,90 @@ CREATE TABLE IF NOT EXISTS relay_config (
     value TEXT NOT NULL
 );
 
+-- Claim documents the holder chose to publish (value + salt are public once here)
+CREATE TABLE IF NOT EXISTS claim_documents (
+    identity_hash TEXT NOT NULL,
+    claim_id TEXT NOT NULL,
+    claim_type TEXT NOT NULL,
+    value_json TEXT NOT NULL,
+    salt TEXT NOT NULL,
+    published_at INTEGER NOT NULL,
+    PRIMARY KEY (identity_hash, claim_id)
+);
+
+-- Attestations (signed statements that a claim was verified)
+CREATE TABLE IF NOT EXISTS attestations (
+    attestation_id TEXT PRIMARY KEY,
+    subject TEXT NOT NULL,
+    claim_id TEXT NOT NULL,
+    claim_type TEXT NOT NULL,
+    commitment TEXT NOT NULL,
+    issuer TEXT,
+    method TEXT NOT NULL,
+    assurance TEXT NOT NULL,
+    issued_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL,
+    body_json TEXT NOT NULL,
+    received_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS attestation_revocations (
+    attestation_id TEXT PRIMARY KEY,
+    issuer TEXT NOT NULL,
+    reason TEXT,
+    issued_at INTEGER NOT NULL,
+    body_json TEXT NOT NULL
+);
+
+-- This node's own attestation issuer (an organization identity + a signing device)
+CREATE TABLE IF NOT EXISTS node_issuer (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    identity_hash TEXT NOT NULL,
+    master_signing_key TEXT NOT NULL,
+    master_encryption_key TEXT NOT NULL,
+    device_pubkey TEXT NOT NULL,
+    device_signing_key TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+);
+
+-- Explorer index (derived from sigchains; safe to rebuild)
+CREATE TABLE IF NOT EXISTS explorer_identities (
+    identity_hash TEXT PRIMARY KEY,
+    name TEXT,
+    identity_type TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    last_event_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    event_count INTEGER NOT NULL,
+    head_hash TEXT NOT NULL,
+    master_pubkey TEXT,
+    device_count INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS explorer_events (
+    event_hash TEXT PRIMARY KEY,
+    identity_hash TEXT NOT NULL,
+    idx INTEGER NOT NULL,
+    event_type TEXT NOT NULL,
+    timestamp INTEGER NOT NULL,
+    signed_by TEXT,
+    summary TEXT NOT NULL
+);
+
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_messages_sender ON messages(sender_identity);
 CREATE INDEX IF NOT EXISTS idx_messages_recipient ON messages(recipient_identity);
 CREATE INDEX IF NOT EXISTS idx_messages_status ON messages(status);
-CREATE INDEX IF NOT EXISTS idx_trust_assertions_subject ON trust_assertions(subject_identity);
 CREATE INDEX IF NOT EXISTS idx_routing_hints_identity ON routing_hints(identity_hash);
+CREATE INDEX IF NOT EXISTS idx_explorer_events_time ON explorer_events(timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_explorer_events_identity ON explorer_events(identity_hash, idx);
+CREATE INDEX IF NOT EXISTS idx_explorer_events_type ON explorer_events(event_type, timestamp);
+CREATE INDEX IF NOT EXISTS idx_explorer_identities_recent ON explorer_identities(last_event_at DESC);
+CREATE INDEX IF NOT EXISTS idx_messages_public_time ON messages(message_type, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_trust_delegations_to ON trust_delegations(to_identity);
+CREATE INDEX IF NOT EXISTS idx_attestations_subject ON attestations(subject, claim_id);
+CREATE INDEX IF NOT EXISTS idx_attestations_issuer ON attestations(issuer, issued_at DESC);
+CREATE INDEX IF NOT EXISTS idx_attestations_time ON attestations(issued_at DESC);
 """
 
 
@@ -194,6 +259,17 @@ class Storage:
             row = cur.fetchone()
             if row is None:
                 cur.execute("INSERT INTO schema_version (version) VALUES (?)", (SCHEMA_VERSION,))
+
+            # IdentityAssertion was replaced by claims and attestations.
+            cur.execute("DROP TABLE IF EXISTS trust_assertions")
+            cur.execute("PRAGMA table_info(trust_delegations)")
+            if "scope" not in {c["name"] for c in cur.fetchall()}:
+                cur.execute("ALTER TABLE trust_delegations ADD COLUMN scope TEXT")
+
+            # Databases created before the explorer index existed: build it once.
+            cur.execute("SELECT COUNT(*) AS n FROM explorer_identities")
+            if cur.fetchone()["n"] == 0:
+                self._reindex_explorer(cur)
 
     @contextmanager
     def transaction(self) -> Iterator[sqlite3.Cursor]:
@@ -260,6 +336,49 @@ class Storage:
             """,
             (sigchain.identity_hash, sigchain.to_json(), int(time.time())),
         )
+        self._index_sigchain(cur, sigchain)
+
+    def _index_sigchain(self, cur: sqlite3.Cursor, sigchain: Sigchain) -> None:
+        """Refresh the explorer index rows for one identity (within a transaction)."""
+        from nodetide.core.explorer_index import event_rows, identity_row
+
+        row = identity_row(sigchain)
+        if row is None:
+            return
+        cur.execute("DELETE FROM explorer_events WHERE identity_hash = ?", (row[0],))
+        cur.executemany(
+            """
+            INSERT OR REPLACE INTO explorer_events
+            (event_hash, identity_hash, idx, event_type, timestamp, signed_by, summary)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            event_rows(sigchain),
+        )
+        cur.execute(
+            """
+            INSERT OR REPLACE INTO explorer_identities
+            (identity_hash, name, identity_type, created_at, last_event_at, updated_at,
+             event_count, head_hash, master_pubkey, device_count)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            row,
+        )
+
+    def _reindex_explorer(self, cur: sqlite3.Cursor) -> None:
+        cur.execute("SELECT sigchain_json FROM sigchains")
+        for stored in cur.fetchall():
+            try:
+                chain = Sigchain.from_json(stored["sigchain_json"])
+            except Exception:
+                continue  # unreadable legacy row: leave it out of the index
+            self._index_sigchain(cur, chain)
+
+    def reindex_explorer(self) -> None:
+        """Rebuild the explorer index from the stored sigchains."""
+        with self.transaction() as cur:
+            cur.execute("DELETE FROM explorer_events")
+            cur.execute("DELETE FROM explorer_identities")
+            self._reindex_explorer(cur)
 
     def save_sigchain(self, sigchain: Sigchain) -> None:
         """Save a sigchain (local or remote)."""
@@ -507,51 +626,6 @@ class Storage:
 
     # Trust operations
 
-    def save_trust_assertion(
-        self,
-        asserter_identity: str,
-        subject_identity: str,
-        confidence: float,
-        timestamp: int,
-        signature: str,
-        claimed_name: str | None = None,
-        verification: str | None = None,
-        note: str | None = None,
-    ) -> None:
-        """Save a trust assertion."""
-        with self.transaction() as cur:
-            cur.execute(
-                """
-                INSERT OR REPLACE INTO trust_assertions
-                (asserter_identity, subject_identity, claimed_name, verification,
-                 confidence, timestamp, note, signature)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    asserter_identity,
-                    subject_identity,
-                    claimed_name,
-                    verification,
-                    confidence,
-                    timestamp,
-                    note,
-                    signature,
-                ),
-            )
-
-    def get_trust_assertions(self, subject_identity: str) -> list[dict]:
-        """Get trust assertions about an identity."""
-        with self.transaction() as cur:
-            cur.execute(
-                """
-                SELECT * FROM trust_assertions
-                WHERE subject_identity = ?
-                ORDER BY timestamp DESC
-                """,
-                (subject_identity,),
-            )
-            return [dict(row) for row in cur.fetchall()]
-
     def save_trust_delegation(
         self,
         from_identity: str,
@@ -559,16 +633,20 @@ class Storage:
         weight: float,
         timestamp: int,
         depth_limit: int | None = None,
+        scope: list[str] | None = None,
     ) -> None:
-        """Save a trust delegation."""
+        """Save a trust delegation (replaces an earlier one for the same pair)."""
         with self.transaction() as cur:
             cur.execute(
                 """
                 INSERT OR REPLACE INTO trust_delegations
-                (from_identity, to_identity, weight, depth_limit, timestamp)
-                VALUES (?, ?, ?, ?, ?)
+                (from_identity, to_identity, weight, depth_limit, timestamp, scope)
+                VALUES (?, ?, ?, ?, ?, ?)
                 """,
-                (from_identity, to_identity, weight, depth_limit, timestamp),
+                (
+                    from_identity, to_identity, weight, depth_limit, timestamp,
+                    json.dumps(scope) if scope is not None else None,
+                ),
             )
 
     def get_trust_delegations(self, from_identity: str) -> list[dict]:
@@ -582,7 +660,148 @@ class Storage:
                 """,
                 (from_identity,),
             )
-            return [dict(row) for row in cur.fetchall()]
+            rows = [dict(row) for row in cur.fetchall()]
+        for row in rows:
+            row["scope"] = json.loads(row["scope"]) if row.get("scope") else None
+        return rows
+
+    # Claims and attestations
+
+    def save_claim_document(
+        self, identity_hash: str, claim_id: str, claim_type: str, value: object, salt: str,
+        published_at: int,
+    ) -> None:
+        """Store a published claim document (the holder consented by signing)."""
+        with self.transaction() as cur:
+            cur.execute(
+                """
+                INSERT OR REPLACE INTO claim_documents
+                (identity_hash, claim_id, claim_type, value_json, salt, published_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (identity_hash, claim_id, claim_type, json.dumps(value), salt, published_at),
+            )
+
+    def delete_claim_document(self, identity_hash: str, claim_id: str) -> bool:
+        with self.transaction() as cur:
+            cur.execute(
+                "DELETE FROM claim_documents WHERE identity_hash = ? AND claim_id = ?",
+                (identity_hash, claim_id),
+            )
+            return cur.rowcount > 0
+
+    def get_claim_documents(self, identity_hash: str) -> dict[str, dict]:
+        """Published claim documents of an identity, by claim_id."""
+        with self.transaction() as cur:
+            cur.execute("SELECT * FROM claim_documents WHERE identity_hash = ?", (identity_hash,))
+            rows = [dict(r) for r in cur.fetchall()]
+        return {
+            r["claim_id"]: {
+                "claim_id": r["claim_id"], "claim_type": r["claim_type"],
+                "value": json.loads(r["value_json"]), "salt": r["salt"],
+                "published_at": r["published_at"],
+            }
+            for r in rows
+        }
+
+    def save_attestation(self, attestation_id: str, body: dict) -> None:
+        import time
+
+        with self.transaction() as cur:
+            cur.execute(
+                """
+                INSERT OR REPLACE INTO attestations
+                (attestation_id, subject, claim_id, claim_type, commitment, issuer, method,
+                 assurance, issued_at, expires_at, body_json, received_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    attestation_id, body["subject"], body["claim_id"], body["claim_type"],
+                    body["commitment"], body.get("issuer"), body["method"], body["assurance"],
+                    body["issued_at"], body["expires_at"], json.dumps(body), int(time.time()),
+                ),
+            )
+
+    def get_attestation(self, attestation_id: str) -> dict | None:
+        with self.transaction() as cur:
+            cur.execute("SELECT body_json FROM attestations WHERE attestation_id = ?", (attestation_id,))
+            row = cur.fetchone()
+        return json.loads(row["body_json"]) if row else None
+
+    def list_attestations(
+        self, subject: str | None = None, claim_id: str | None = None, issuer: str | None = None,
+        limit: int = 100,
+    ) -> list[dict]:
+        """Stored attestations (each with its id and whether the issuer revoked it)."""
+        where, params = ["1=1"], []
+        for column, value in (("a.subject", subject), ("a.claim_id", claim_id), ("a.issuer", issuer)):
+            if value:
+                where.append(f"{column} = ?")
+                params.append(value)
+        with self.transaction() as cur:
+            cur.execute(
+                f"""
+                SELECT a.attestation_id, a.body_json, r.issued_at AS revoked_at, r.reason AS revoke_reason
+                FROM attestations a
+                LEFT JOIN attestation_revocations r ON r.attestation_id = a.attestation_id
+                WHERE {" AND ".join(where)}
+                ORDER BY a.issued_at DESC LIMIT ?
+                """,
+                [*params, limit],
+            )
+            rows = cur.fetchall()
+        return [
+            {
+                "attestation_id": r["attestation_id"],
+                "attestation": json.loads(r["body_json"]),
+                "revoked_at": r["revoked_at"],
+                "revoke_reason": r["revoke_reason"],
+            }
+            for r in rows
+        ]
+
+    def save_attestation_revocation(self, attestation_id: str, body: dict) -> None:
+        with self.transaction() as cur:
+            cur.execute(
+                """
+                INSERT OR REPLACE INTO attestation_revocations
+                (attestation_id, issuer, reason, issued_at, body_json) VALUES (?, ?, ?, ?, ?)
+                """,
+                (attestation_id, body["issuer"], body.get("reason"), body["issued_at"], json.dumps(body)),
+            )
+
+    def get_attestation_revocation(self, attestation_id: str) -> dict | None:
+        with self.transaction() as cur:
+            cur.execute(
+                "SELECT body_json FROM attestation_revocations WHERE attestation_id = ?",
+                (attestation_id,),
+            )
+            row = cur.fetchone()
+        return json.loads(row["body_json"]) if row else None
+
+    def get_node_issuer(self) -> dict | None:
+        with self.transaction() as cur:
+            cur.execute("SELECT * FROM node_issuer WHERE id = 1")
+            row = cur.fetchone()
+        return dict(row) if row else None
+
+    def save_node_issuer(
+        self, identity_hash: str, master_signing_key: str, master_encryption_key: str,
+        device_pubkey: str, device_signing_key: str,
+    ) -> None:
+        import time
+
+        with self.transaction() as cur:
+            cur.execute(
+                """
+                INSERT OR REPLACE INTO node_issuer
+                (id, identity_hash, master_signing_key, master_encryption_key,
+                 device_pubkey, device_signing_key, created_at)
+                VALUES (1, ?, ?, ?, ?, ?, ?)
+                """,
+                (identity_hash, master_signing_key, master_encryption_key,
+                 device_pubkey, device_signing_key, int(time.time())),
+            )
 
     def set_default_identity(self, identity_hash: str) -> bool:
         """Set an existing local identity as the default.

@@ -8,7 +8,6 @@ from nodetide.api.auth.sessions import (
     RecoveryStore,
     verify_event_signature,
     get_required_capability,
-    verify_assertion_signature,
     verify_session_request,
     extract_bearer_token,
 )
@@ -17,6 +16,8 @@ from nodetide.api.auth.casbin_auth import (
     setup_casbin_auth,
     casbin_middleware,
 )
+from nodetide.api.auth.challenges import ChallengeStore, ChallengeStoreFull
+from nodetide.api.auth.native import setup_native_auth_routes
 
 __all__ = [
     # Sessions
@@ -27,11 +28,14 @@ __all__ = [
     "RecoveryStore",
     "verify_event_signature",
     "get_required_capability",
-    "verify_assertion_signature",
     "verify_session_request",
     "extract_bearer_token",
     # Casbin
     "CasbinAuth",
     "setup_casbin_auth",
     "casbin_middleware",
+    # Native SSO
+    "ChallengeStore",
+    "ChallengeStoreFull",
+    "setup_native_auth_routes",
 ]

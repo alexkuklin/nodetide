@@ -7,7 +7,9 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"time"
 
+	"github.com/alexkuklin/distriblog/auth"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 )
@@ -25,8 +27,16 @@ func main() {
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
 
+	// Native SSO (challenge / verify). Login sessions are not implemented in
+	// the Go node yet.
+	authHandler := auth.NewHandler(os.Getenv("NODETIDE_AUTH_AUDIENCE"))
+	authHandler.StartCleanup(time.Minute)
+
 	// API routes
 	r.Route("/api", func(r chi.Router) {
+		r.Post("/auth/challenge", authHandler.Challenge)
+		r.Post("/auth/verify", authHandler.Verify)
+
 		r.Post("/identities", createIdentity)
 		r.Get("/identities", listIdentities)
 		r.Get("/identities/{hash}", getIdentity)
@@ -43,8 +53,6 @@ func main() {
 		r.Get("/identities/{hash}/recovery/{id}", getRecoveryStatus)
 		r.Get("/identities/{hash}/recovery/pending", listPendingRecoveries)
 
-		r.Post("/trust/assertions", createAssertion)
-		r.Get("/trust/assertions", listAssertions)
 		r.Post("/trust/delegations", createDelegation)
 		r.Get("/trust/delegations", listDelegations)
 		r.Get("/trust/calculate/{hash}", calculateTrust)
@@ -140,16 +148,6 @@ func getRecoveryStatus(w http.ResponseWriter, r *http.Request) {
 func listPendingRecoveries(w http.ResponseWriter, r *http.Request) {
 	jsonResponse(w, 200, map[string]interface{}{
 		"recoveries": []interface{}{},
-	})
-}
-
-func createAssertion(w http.ResponseWriter, r *http.Request) {
-	errorResponse(w, 501, "not_implemented", "Go implementation in progress")
-}
-
-func listAssertions(w http.ResponseWriter, r *http.Request) {
-	jsonResponse(w, 200, map[string]interface{}{
-		"assertions": []interface{}{},
 	})
 }
 
