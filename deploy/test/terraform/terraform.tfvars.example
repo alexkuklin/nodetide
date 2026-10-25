@@ -1,0 +1,10 @@
+# cp terraform.tfvars.example terraform.tfvars   (terraform.tfvars is git-ignored)
+ssh_public_key = "ssh-ed25519 AAAA... deploy@nodetide"
+
+# Optional: serve nt-node/nt-rp/nt-wallet.<domain> and let Terraform create the DNS records.
+# domain   = "test.example.com"
+# dns_zone = "example.com"
+
+# Tried in this order; only combinations Hetzner reports as available are used.
+# server_type_preference = ["cx23", "cpx22", "cax11"]
+# location_preference    = ["fsn1", "nbg1", "hel1"]

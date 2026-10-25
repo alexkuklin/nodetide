@@ -3,6 +3,25 @@
 Progress notes kept between sessions. Newest first. Each entry says what changed, why, and what is
 still open, so a new session can pick up without re-deriving context.
 
+## 2026-10-25 (infrastructure) - Terraform for Hetzner + manual workflow
+
+### Added
+- **`deploy/test/terraform/`**: one Hetzner Cloud server (cloud-init installs Docker, creates the `deploy` user, key-only
+  ssh), firewall (22/80/443/icmp), ssh key, optional A/AAAA records via `hcloud_zone_rrset`. Remote state in an
+  S3-compatible bucket (Hetzner Object Storage). Provider lock file includes linux/darwin hashes.
+- **Availability-aware placement** (`modules/placement`, pure module with 10 offline `terraform test` cases): picks the
+  first usable (server type, location) from preference lists using `hcloud_server_types[].locations[].available` /
+  deprecation; fails with a per-pair table when nothing is available. The `hcloud_datacenters` data source was NOT used:
+  it is deprecated and the API returns 410 after 2026-10-01.
+- **`.github/workflows/test-stack.yml`**: manual `plan | apply | destroy` (+ optional `deploy_app`, per-run type/location
+  overrides), `test-stack` environment for approvals, concurrency lock, ssh wait for cloud-init, reuses the server's
+  existing `.env` so redeploys keep secrets and data. Required secrets/variables and `gh` commands: `deploy/test/terraform/README.md`.
+
+### Open
+- Never applied against a real account: no token yet. Validated with `terraform validate`, `fmt` and the offline tests only.
+- Workflow untested on GitHub (needs the secrets above and the `test-stack` environment).
+- Domain / who serves 80 and 443 on the target is still undecided.
+
 ## 2026-10-25 (deployment) - docker-compose test stack
 
 ### Added

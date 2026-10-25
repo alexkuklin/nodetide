@@ -52,3 +52,12 @@ deploy/test/config/
 deploy/test/.smoke/
 deploy/test/anchors/*
 !deploy/test/anchors/.gitkeep
+
+# terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+tfplan
+terraform.tfvars
+crash.log

@@ -1,0 +1,169 @@
+name: Test stack (Hetzner)
+
+# Manual only. Creates / changes / destroys the Hetzner server for deploy/test and can deploy the
+# docker-compose stack onto it. Required secrets and variables: deploy/test/terraform/README.md
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "What to do"
+        type: choice
+        options: [plan, apply, destroy]
+        default: plan
+      deploy_app:
+        description: "After apply: deploy the docker-compose stack to the server"
+        type: boolean
+        default: false
+      server_types:
+        description: "Server types in order of preference (comma separated; empty = defaults)"
+        type: string
+        default: ""
+      locations:
+        description: "Locations in order of preference (comma separated; empty = defaults)"
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+# One run at a time: the state backend has no lock of its own.
+concurrency:
+  group: test-stack
+  cancel-in-progress: false
+
+env:
+  TF_IN_AUTOMATION: "1"
+  TF_INPUT: "0"
+  HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
+  AWS_ACCESS_KEY_ID: ${{ secrets.TF_STATE_ACCESS_KEY }}
+  AWS_SECRET_ACCESS_KEY: ${{ secrets.TF_STATE_SECRET_KEY }}
+  TF_VAR_ssh_public_key: ${{ vars.DEPLOY_SSH_PUBLIC_KEY }}
+  TF_VAR_domain: ${{ vars.TEST_DOMAIN }}
+  TF_VAR_dns_zone: ${{ vars.TEST_DNS_ZONE }}
+
+jobs:
+  terraform:
+    runs-on: ubuntu-latest
+    environment: test-stack   # add required reviewers to this environment to gate apply/destroy
+    defaults:
+      run:
+        working-directory: deploy/test/terraform
+    outputs:
+      ipv4: ${{ steps.out.outputs.ipv4 }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check configuration
+        run: |
+          missing=""
+          for v in HCLOUD_TOKEN AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY TF_VAR_ssh_public_key; do
+            [ -n "${!v}" ] || missing="$missing $v"
+          done
+          for v in TF_STATE_BUCKET TF_STATE_ENDPOINT; do
+            [ -n "${!v}" ] || missing="$missing $v"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::missing secrets/variables:$missing (see deploy/test/terraform/README.md)"
+            exit 1
+          fi
+        env:
+          TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
+          TF_STATE_ENDPOINT: ${{ vars.TF_STATE_ENDPOINT }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.8
+          terraform_wrapper: false
+
+      - name: Offline tests of the placement logic
+        working-directory: deploy/test/terraform/modules/placement
+        run: terraform init -backend=false && terraform test
+
+      - name: Init
+        env:
+          TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
+          TF_STATE_ENDPOINT: ${{ vars.TF_STATE_ENDPOINT }}
+        run: |
+          terraform init \
+            -backend-config="bucket=$TF_STATE_BUCKET" \
+            -backend-config="key=nodetide-test/terraform.tfstate" \
+            -backend-config="endpoints={s3=\"$TF_STATE_ENDPOINT\"}"
+
+      - name: Validate
+        run: terraform validate
+
+      - name: Preference overrides
+        env:
+          IN_TYPES: ${{ inputs.server_types }}
+          IN_LOCATIONS: ${{ inputs.locations }}
+        run: |
+          to_list() { printf '%s' "$1" | tr -d ' ' | awk -F, '{printf "["; for(i=1;i<=NF;i++) printf "%s\"%s\"", (i>1?",":""), $i; printf "]"}'; }
+          [ -z "$IN_TYPES" ] || echo "TF_VAR_server_type_preference=$(to_list "$IN_TYPES")" >> "$GITHUB_ENV"
+          [ -z "$IN_LOCATIONS" ] || echo "TF_VAR_location_preference=$(to_list "$IN_LOCATIONS")" >> "$GITHUB_ENV"
+
+      - name: Plan
+        if: inputs.action != 'destroy'
+        run: terraform plan -out=tfplan -no-color
+
+      - name: Plan (destroy)
+        if: inputs.action == 'destroy'
+        run: terraform plan -destroy -out=tfplan -no-color
+
+      - name: Apply
+        if: inputs.action != 'plan'
+        run: terraform apply -no-color tfplan
+
+      - name: Outputs
+        id: out
+        if: inputs.action == 'apply'
+        run: |
+          terraform output -no-color
+          echo "ipv4=$(terraform output -raw ipv4)" >> "$GITHUB_OUTPUT"
+
+  deploy:
+    needs: terraform
+    if: inputs.action == 'apply' && inputs.deploy_app
+    runs-on: ubuntu-latest
+    environment: test-stack
+    env:
+      SERVER: ${{ needs.terraform.outputs.ipv4 }}
+      DEPLOY_USER: deploy
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: SSH setup
+        env:
+          DEPLOY_KEY: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+          printf 'Host *\n  IdentityFile ~/.ssh/id_deploy\n  StrictHostKeyChecking accept-new\n  ServerAliveInterval 30\n' > ~/.ssh/config
+
+      - name: Wait for the server to finish its first boot
+        run: |
+          for i in $(seq 1 60); do
+            if ssh -o ConnectTimeout=5 "$DEPLOY_USER@$SERVER" 'test -e /var/lib/cloud/instance/nodetide-ready' 2>/dev/null; then
+              echo "server ready"; exit 0
+            fi
+            sleep 10
+          done
+          echo "::error::server did not become ready in 10 minutes"; exit 1
+
+      - name: Configure (keeps an existing .env so secrets and data stay valid)
+        working-directory: deploy/test
+        env:
+          TEST_DOMAIN: ${{ vars.TEST_DOMAIN }}
+        run: |
+          if scp "$DEPLOY_USER@$SERVER:nodetide-test/deploy/test/.env" .env 2>/dev/null; then
+            echo "reusing the .env already on the server"
+          elif [ -n "$TEST_DOMAIN" ]; then
+            ./init.sh --domain "$TEST_DOMAIN" --edge
+          else
+            echo "::error::no TEST_DOMAIN variable: a public server needs a domain (see README)"; exit 1
+          fi
+
+      - name: Deploy
+        working-directory: deploy/test
+        run: ./deploy.sh "$DEPLOY_USER@$SERVER"

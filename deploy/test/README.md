@@ -95,3 +95,7 @@ wallet's volume does keep the attestation file, so `docker compose down -v` when
 - `.env`, `config/`, `anchors/` and `.smoke/` are git-ignored and excluded from the Docker build context.
 - The wallet's keys are development keys; its password is the only thing between the internet and that identity.
 - `NODETIDE_OIDC_ALLOW_INSECURE` (plain http) exists only for the local profile and is `0` for a domain.
+
+## Server on Hetzner
+
+`terraform/` creates the server (checking real availability) and `.github/workflows/test-stack.yml` applies it manually; see `terraform/README.md` for the required secrets.
