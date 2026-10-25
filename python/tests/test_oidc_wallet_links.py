@@ -25,6 +25,12 @@ def test_links_carry_the_challenge_address_and_name_the_wallet():
     assert "Open in wallet at localhost:4572" in html
 
 
+def test_wallet_links_open_in_a_new_tab_so_this_page_keeps_polling():
+    html = page(["http://localhost:4572"])
+    link = html[html.index('<a class="btn" target="_blank"'):].split(">")[0]
+    assert 'rel="noopener noreferrer"' in link and "/signin?link=" in html
+
+
 def test_the_fragment_secret_is_never_put_in_a_wallet_link():
     assert "#" not in "".join(p for p in page(["http://localhost:4572"]).split('href="')[2:3]).split('"')[0]
 

@@ -63,7 +63,8 @@ def render_login_page(
     status_url = json.dumps(f"/oidc/login/{attempt_id}/status").replace("</", "<\\/")
     script = _SCRIPT % {"status_url": status_url}
     wallet_links = "".join(
-        f'<p><a class="btn" href="{html.escape(w + "/signin?link=" + quote(challenge_url, safe=""), quote=True)}">'
+        f'<p><a class="btn" target="_blank" rel="noopener noreferrer" '
+        f'href="{html.escape(w + "/signin?link=" + quote(challenge_url, safe=""), quote=True)}">'
         f"Open in wallet at {html.escape(urlsplit(w).netloc)}</a></p>"
         for w in wallet_urls
     )
