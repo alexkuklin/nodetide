@@ -43,7 +43,12 @@ JSON
 if [ "$UPGRADE" = 1 ]; then
     [ -f .env ] || { echo "no .env to upgrade" >&2; exit 1; }
     . ./.env
-    if grep -q '^GRAFANA_HOST=' .env; then echo ".env is up to date"; exit 0; fi
+    if grep -q '^GRAFANA_HOST=' .env; then
+        # nothing to add, but config/ is not kept anywhere else: rebuild it from the secrets in .env
+        write_clients "$OIDC_CLIENT_SECRET" "$GRAFANA_CLIENT_SECRET" "$RP_URL" "$GRAFANA_URL"
+        echo ".env is up to date; config/clients.json rebuilt from it"
+        exit 0
+    fi
     BASE=${NODE_HOST#nt-node.}
     G_HOST=nt-grafana.$BASE
     G_URL=$(printf '%s' "$NODE_URL" | sed "s|$NODE_HOST|$G_HOST|")
