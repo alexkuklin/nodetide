@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import html
 import json
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 _STYLE = """
 body{font:16px/1.5 system-ui,sans-serif;max-width:32rem;margin:3rem auto;padding:0 1rem;color:#1a1a1a}
@@ -55,11 +55,18 @@ def csp(script_nonce: str) -> str:
     )
 
 
-def render_login_page(client_name: str, attempt_id: str, issuer: str, script_nonce: str) -> str:
+def render_login_page(
+    client_name: str, attempt_id: str, issuer: str, script_nonce: str, wallet_urls: tuple[str, ...] | list[str] = ()
+) -> str:
     challenge_url = f"{issuer}/oidc/login/{attempt_id}/challenge"
     deep_link = "nodetide://login?challenge_url=" + quote(challenge_url, safe="")
     status_url = json.dumps(f"/oidc/login/{attempt_id}/status").replace("</", "<\\/")
     script = _SCRIPT % {"status_url": status_url}
+    wallet_links = "".join(
+        f'<p><a class="btn" href="{html.escape(w + "/signin?link=" + quote(challenge_url, safe=""), quote=True)}">'
+        f"Open in wallet at {html.escape(urlsplit(w).netloc)}</a></p>"
+        for w in wallet_urls
+    )
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -69,7 +76,7 @@ def render_login_page(client_name: str, attempt_id: str, issuer: str, script_non
 <h1>Sign in to {html.escape(client_name)}</h1>
 <p>Approve this sign-in in your Nodetide app. Only approve it if you started it just now.</p>
 <p><a class="btn" href="{html.escape(deep_link, quote=True)}">Open Nodetide app</a></p>
-<p>Or paste this address into your Nodetide app:</p>
+{wallet_links}<p>Or paste this address into your Nodetide app:</p>
 <code>{html.escape(challenge_url)}</code>
 <div id="status" role="status" aria-live="polite">Checking…</div>
 <p><a id="back" href="#"></a></p>

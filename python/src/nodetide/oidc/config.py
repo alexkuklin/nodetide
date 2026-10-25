@@ -9,6 +9,8 @@ Environment:
     NODETIDE_FETCH_ALLOW_PRIVATE   "1" to let the fetcher contact private/loopback addresses
     NODETIDE_OIDC_TRUSTED_ISSUERS  comma-separated identity hashes trusted to attest email/phone/legal_name
     NODETIDE_OIDC_NAME_MATCH       exact|transliterated|approximate: how loosely a legal name may match an eID certificate
+    NODETIDE_OIDC_WALLET_URLS      comma-separated web wallets (http(s) addresses) the sign-in page offers "open in" links for;
+                                   a wallet on the user's own machine is typically http://localhost:4572
 
 Clients file:
     [{"client_id": "grafana", "name": "Grafana",
@@ -78,6 +80,7 @@ class OIDCConfig:
     trusted_issuers: list[str] = field(default_factory=list)  # extra attestation issuers to accept
     name_match: str = "transliterated"
     allow_insecure: bool = False  # http:// issuer and redirect URIs: local testing only
+    wallet_urls: list[str] = field(default_factory=list)  # web wallets offered on the sign-in page
     claim_rules: dict = field(default_factory=dict)  # explicit ClaimRule overrides by claim type
     attempt_lifetime: int = 900  # how long a sign-in page stays usable
     code_lifetime: int = 120
@@ -94,6 +97,10 @@ class OIDCConfig:
         for issuer in self.trusted_issuers:
             if len(issuer) != 64 or any(c not in "0123456789abcdef" for c in issuer):
                 raise ConfigError(f"trusted issuer {issuer!r} is not an identity hash")
+        for wallet in self.wallet_urls:
+            if not _is_secure_url(wallet, allow_insecure=True) or urlsplit(wallet).query or urlsplit(wallet).fragment:
+                raise ConfigError(f"wallet URL {wallet!r} must be an http(s) address without query or fragment")
+        self.wallet_urls = [w.rstrip("/") for w in self.wallet_urls]
         if self.name_match not in ("exact", "transliterated", "approximate"):
             raise ConfigError("name_match must be exact, transliterated or approximate")
 
@@ -170,4 +177,5 @@ class OIDCConfig:
             ],
             name_match=os.environ.get("NODETIDE_OIDC_NAME_MATCH", "transliterated"),
             allow_insecure=insecure,
+            wallet_urls=[w.strip() for w in os.environ.get("NODETIDE_OIDC_WALLET_URLS", "").split(",") if w.strip()],
         )

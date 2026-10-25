@@ -3,6 +3,15 @@
 Progress notes kept between sessions. Newest first. Each entry says what changed, why, and what is
 still open, so a new session can pick up without re-deriving context.
 
+## 2026-10-25 (sign-in) - "Open in wallet" links for web wallets
+
+### Added
+- `NODETIDE_OIDC_WALLET_URLS` (comma separated http(s) addresses): the sign-in page shows an "Open in wallet at <host>" link
+  per wallet, pointing at `<wallet>/signin?link=<challenge address>` (never the fragment secret). The test stack sets it to its
+  own wallet plus `http://localhost:4572`, so a wallet running on the user's machine (`local-wallet.sh`) works. The existing
+  "Open Nodetide app" deep link (`nodetide://`) still only works where the native app is installed.
+- Test wallet: `GET /signin?link=...` previews the request (approval stays a POST).
+
 ## 2026-10-25 (deployment) - Grafana as a guinea pig + local wallet
 
 ### Added

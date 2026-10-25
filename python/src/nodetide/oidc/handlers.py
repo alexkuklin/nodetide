@@ -126,7 +126,9 @@ async def login_page(request: web.Request) -> web.Response:
         return _html_error("This sign-in is no longer valid. Please start again.", 404)
 
     script_nonce = secrets.token_urlsafe(16)
-    body = render_login_page(attempt.client.name, attempt.id, provider.config.issuer, script_nonce)
+    body = render_login_page(
+        attempt.client.name, attempt.id, provider.config.issuer, script_nonce, provider.config.wallet_urls
+    )
     return web.Response(
         text=body,
         content_type="text/html",

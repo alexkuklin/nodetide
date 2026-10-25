@@ -35,6 +35,8 @@ services:
       NODETIDE_OIDC_CLIENTS_FILE: /config/clients.json
       NODETIDE_OIDC_KEY_FILE: /data/oidc_signing_key.pem
       NODETIDE_OIDC_ALLOW_INSECURE: ${ALLOW_INSECURE:-0}
+      # the sign-in page offers "open in wallet" for the stack's wallet and for one on the user's own machine
+      NODETIDE_OIDC_WALLET_URLS: ${WALLET_URL},http://localhost:${LOCAL_WALLET_PORT:-4572}
       # email claims verified through the test mailbox (nothing leaves the stack)
       NODETIDE_EMAIL_VERIFIER: "1"
       NODETIDE_SMTP_HOST: mailpit

@@ -476,6 +476,12 @@ def signin_page(preview: dict[str, Any]) -> str:
 {table}<p><button>Approve</button> <a href="/">Cancel</a></p></form>""")
 
 
+async def signin_link(request: web.Request) -> web.Response:
+    """GET /signin?link=...  the "open in wallet" link on the node's sign-in page. Only previews: approving is a POST."""
+    link = request.query.get("link", "")
+    return web.Response(text=signin_page(await signin_preview(link)), content_type="text/html")
+
+
 async def dashboard(request: web.Request) -> web.Response:
     view = state_view()
     identity = view["identity"]
@@ -520,6 +526,7 @@ def build_app() -> web.Application:
     app = web.Application(middlewares=[basic_auth, errors], client_max_size=4 * 1024 * 1024)
     app.router.add_get("/", dashboard)
     app.router.add_get("/healthz", healthz)
+    app.router.add_get("/signin", signin_link)
     app.router.add_get("/api/state", api_state)
     app.router.add_post("/api/claims/email", api_claim_email)
     app.router.add_post("/api/claims/name", api_claim_name)
