@@ -3,6 +3,28 @@
 Progress notes kept between sessions. Newest first. Each entry says what changed, why, and what is
 still open, so a new session can pick up without re-deriving context.
 
+## 2026-10-25 (latest) - signing testkit
+
+### Added
+- **`testkit/`** (scope deliberately limited to signing): `./testkit/run setup | selftest | token |
+  claim | sign | anchors | verify | report | clean`. Isolated state in `.testkit/` via the new
+  `NODETIDE_HOME` variable (the CLI's data directory), so `~/.nodetide` is never touched. `report` prints
+  only technical facts (no names, ID numbers or hashes) and is the thing to paste when asking for help.
+  The kit is itself tested (`python/tests/test_testkit.py`).
+- `nodetide eid anchors ATTESTATION --out DIR` (`eidas/anchors.py`): follows the certificate's
+  AIA links to collect the issuer chain, checks each certificate signed the one below, shows
+  SHA-256 fingerprints and saves them as trust anchors only after interactive confirmation. Refuses
+  private/loopback addresses unless `--allow-private`.
+
+### Fixed
+- Claim IDs could begin with `-`, so `nodetide claim ...` / `eid ...` parsed them as options. New
+  claim IDs always start with a letter or digit.
+
+### Scope note
+- A broader testkit (demo node, simulated user app, simulated OIDC client, Go/UI runners) was started and
+  removed at the owner's request: "only signing". If wanted later, the useful missing piece is a
+  simulated user app, since no real client can yet approve OIDC sign-ins or verify an email claim.
+
 ## 2026-10-25 (later) - eID token tooling, name mapping, verified claims in OIDC
 
 ### Added

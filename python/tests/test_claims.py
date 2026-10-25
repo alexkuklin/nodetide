@@ -408,3 +408,9 @@ def test_delegation_validation_and_storage_roundtrip():
     rows = {r["to_identity"]: r for r in storage.get_trust_delegations("a")}
     assert rows["b"]["scope"] == ["email"] and rows["b"]["depth_limit"] == 2
     assert rows["c"]["scope"] is None
+
+
+def test_new_claim_ids_can_always_be_typed_as_cli_arguments():
+    ids = [ClaimDocument.new_claim_id() for _ in range(2000)]
+    assert all(i[0].isalnum() and len(i) == 22 for i in ids)
+    assert len(set(ids)) == len(ids)

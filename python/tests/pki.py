@@ -12,7 +12,7 @@ from asn1crypto import x509 as asn1_x509
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec, padding, rsa
-from cryptography.x509.oid import NameOID, ObjectIdentifier
+from cryptography.x509.oid import AuthorityInformationAccessOID, NameOID, ObjectIdentifier
 
 from nodetide.eidas.certs import (
     QC_COMPLIANCE, QC_SSCD, QC_STATEMENTS_OID, QC_TYPE, QC_TYPE_ESIGN,
@@ -49,7 +49,13 @@ class Ca:
         return asn1_x509.Certificate.load(self.cert.public_bytes(serialization.Encoding.DER))
 
 
-def make_ca(common_name: str, parent: Ca | None = None, years: int = 10, path_length: int | None = None) -> Ca:
+def aia(url: str) -> x509.AuthorityInformationAccess:
+    return x509.AuthorityInformationAccess([x509.AccessDescription(
+        AuthorityInformationAccessOID.CA_ISSUERS, x509.UniformResourceIdentifier(url))])
+
+
+def make_ca(common_name: str, parent: Ca | None = None, years: int = 10, path_length: int | None = None,
+            aia_url: str | None = None) -> Ca:
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     subject = _name(common_name)
     issuer_name = parent.cert.subject if parent else subject
@@ -69,6 +75,8 @@ def make_ca(common_name: str, parent: Ca | None = None, years: int = 10, path_le
     if parent:
         builder = builder.add_extension(
             x509.AuthorityKeyIdentifier.from_issuer_public_key(parent.key.public_key()), critical=False)
+    if aia_url:
+        builder = builder.add_extension(aia(aia_url), critical=False)
     return Ca(builder.sign(signing_key, hashes.SHA256()), key, parent)
 
 
@@ -107,6 +115,7 @@ def make_signer_cert(
     not_after: dt.datetime | None = None,
     crl_url: str | None = None,
     common_name: str | None = None,
+    aia_url: str | None = None,
 ) -> Leaf:
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048) if key_kind == "rsa" \
         else ec.generate_private_key(ec.SECP256R1())
@@ -126,6 +135,8 @@ def make_signer_cert(
             x509.UnrecognizedExtension(ObjectIdentifier(QC_STATEMENTS_OID), qc_statements(qualified, qscd)),
             critical=False)
     )
+    if aia_url:
+        builder = builder.add_extension(aia(aia_url), critical=False)
     if crl_url:
         builder = builder.add_extension(x509.CRLDistributionPoints([x509.DistributionPoint(
             full_name=[x509.UniformResourceIdentifier(crl_url)], relative_name=None, reasons=None,

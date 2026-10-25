@@ -167,11 +167,19 @@ class ClaimDocument:
             raise ClaimError("salt must be 16 bytes of hex")
         self.value = normalize_value(self.claim_type, self.value)
 
+    @staticmethod
+    def new_claim_id() -> str:
+        """128 random bits, base64url, never starting with "-" (so it can be typed as a CLI argument)."""
+        while True:
+            candidate = secrets.token_urlsafe(16)
+            if candidate[0].isalnum():
+                return candidate
+
     @classmethod
     def create(cls, identity: str, claim_type: str, value: Any) -> ClaimDocument:
         return cls(
             identity=identity,
-            claim_id=secrets.token_urlsafe(16),
+            claim_id=cls.new_claim_id(),
             claim_type=claim_type,
             value=value,
             salt=secrets.token_bytes(16).hex(),

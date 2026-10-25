@@ -573,3 +573,13 @@ def test_eid_sign_wrong_pin_costs_one_attempt_and_is_not_echoed(home, tmp_path, 
     assert result.exit_code != 0 and "incorrect PIN" in result.output
     assert "wrong-pin" not in result.output.replace("Token PIN", "")  # never echoed back
     assert len(pk11.pins_tried) == 1 and pk11.slots[16].attempts == 2
+
+
+def test_nodetide_home_redirects_the_cli_data_directory(tmp_path, monkeypatch):
+    elsewhere = tmp_path / "isolated"
+    monkeypatch.setenv("HOME", str(tmp_path / "real-home"))
+    monkeypatch.setenv("NODETIDE_HOME", str(elsewhere))
+    assert run("identity", "create", "--name", "Isolated").exit_code == 0
+    run("claim", "add", "--type", "email", "--email", "a@example.com")
+    assert (elsewhere / "nodetide.db").exists() and list((elsewhere / "claims").glob("*.json"))
+    assert not (tmp_path / "real-home" / ".nodetide").exists()  # the real data directory was never touched

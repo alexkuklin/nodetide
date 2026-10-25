@@ -18,7 +18,9 @@ from nodetide.core.storage import Storage
 
 
 def _storage() -> Storage:
-    return Storage.open(Path.home() / ".nodetide" / "nodetide.db")
+    from nodetide.cli.main import data_dir
+
+    return Storage.open(data_dir() / "nodetide.db")
 
 
 def _claims_dir(storage: Storage) -> Path:
@@ -366,6 +368,47 @@ def eid_chain(attestation_file: str):
                     click.echo(f"  {access['access_method']}: {access['access_location']}")
     click.echo("\nPut the CA certificates you trust (from your eID provider or the EU trusted list)")
     click.echo("into a directory and pass it to `eid verify --anchors DIR`.")
+
+
+@eid.command("anchors")
+@click.argument("attestation_file", type=click.Path(exists=True, dir_okay=False))
+@click.option("--out", "-o", required=True, type=click.Path(file_okay=False), help="Directory to save the CA certificates in")
+@click.option("--allow-private", is_flag=True, help="Allow downloads from private/loopback addresses (development only)")
+def eid_anchors(attestation_file: str, out: str, allow_private: bool):
+    """Fetch the CA certificates behind an attestation, to review and save as trust anchors.
+
+    Downloading a certificate does not make it trustworthy. Compare the fingerprints with the
+    ones your eID provider (or the EU trusted list) publishes before you say yes.
+    """
+    import functools
+
+    from nodetide.eidas.anchors import AnchorError, default_fetch, fetch_chain, fingerprint, write_anchors
+    from nodetide.eidas.verify import inspect_proof
+
+    attestation = Attestation.from_dict(json.loads(Path(attestation_file).read_text()))
+    summary = inspect_proof(attestation)
+    try:
+        chain = fetch_chain(summary.cades.signer_cert,
+                            functools.partial(default_fetch, allow_private=allow_private),
+                            known=summary.cades.other_certs)
+    except AnchorError as e:
+        raise click.ClickException(str(e)) from None
+    if not chain:
+        raise click.ClickException("Could not find the issuer's certificate (no usable AIA link and none in the signature)")
+    click.echo("CA certificates above the signer certificate, nearest first:\n")
+    for cert in chain:
+        selfsigned = cert.issuer == cert.subject
+        click.echo(f"  {cert.subject.native.get('common_name')}{'  (root)' if selfsigned else ''}")
+        click.echo(f"    issued by: {cert.issuer.native.get('common_name')}")
+        click.echo(f"    sha256:    {fingerprint(cert)}")
+    if chain[-1].issuer != chain[-1].subject:
+        click.echo("\nNote: the chain ends before a self-signed root; the top certificate will act as the anchor.")
+    click.echo("\nCompare these fingerprints with the provider's published ones. "
+               "Anything you save here will be trusted to vouch for signers.")
+    if not click.confirm("Save them as trust anchors?", default=False):
+        raise click.Abort()
+    for path in write_anchors(chain, out):
+        click.echo(f"saved {path}")
 
 
 @eid.command("verify")

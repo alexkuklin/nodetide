@@ -1,0 +1,3 @@
+#!/bin/sh
+# Signing testkit entry point:  ./testkit/run <command>   (see ./testkit/run --help)
+exec python3 "$(dirname "$0")/signing.py" "$@"

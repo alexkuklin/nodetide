@@ -501,3 +501,69 @@ def test_certificate_without_name_attributes_falls_back_to_the_common_name():
     assert match_legal_name("Maria", "Ivanova", names) == "exact"
     assert match_legal_name("Maria", "Petrova", names) is None
     assert match_legal_name("Maria", "Ivanova", CertNames(None, None, "MARIA")) is None
+
+
+# --- collecting the CA chain for review -----------------------------------------------------------------------------
+
+
+def test_fetch_chain_follows_aia_links_and_checks_each_signature():
+    from nodetide.eidas.anchors import fetch_chain, fingerprint, issuer_urls, write_anchors
+
+    root = pki.make_ca("Root", path_length=1)
+    inter = pki.make_ca("Intermediate", parent=root, path_length=0, aia_url="http://pki.example.org/root.cer")
+    leaf = pki.make_signer_cert(inter, aia_url="http://pki.example.org/inter.cer")
+    served = {"http://pki.example.org/root.cer": root.asn1.dump(), "http://pki.example.org/inter.cer": inter.asn1.dump()}
+    requested = []
+
+    def fetch(url):
+        requested.append(url)
+        return served[url]
+
+    assert issuer_urls(leaf.asn1) == ["http://pki.example.org/inter.cer"]
+    chain = fetch_chain(leaf.asn1, fetch)
+    assert [c.subject.native["common_name"] for c in chain] == ["Intermediate", "Root"]
+    assert requested == ["http://pki.example.org/inter.cer", "http://pki.example.org/root.cer"]
+
+    # certificates already at hand are used before anything is downloaded
+    requested.clear()
+    assert len(fetch_chain(leaf.asn1, fetch, known=[inter.asn1, root.asn1])) == 2 and requested == []
+
+
+def test_fetch_chain_rejects_a_certificate_that_did_not_sign():
+    from nodetide.eidas.anchors import fetch_chain
+
+    root = pki.make_ca("Root")
+    imposter = pki.make_ca("Root")  # same name, different key
+    leaf = pki.make_signer_cert(root, aia_url="http://pki.example.org/ca.cer")
+    assert fetch_chain(leaf.asn1, lambda url: imposter.asn1.dump()) == []
+
+
+def test_fetch_chain_survives_bad_downloads_and_stops_at_a_root():
+    from nodetide.eidas.anchors import fetch_chain
+
+    root = pki.make_ca("Root")
+    leaf = pki.make_signer_cert(root, aia_url="http://pki.example.org/ca.cer")
+
+    def broken(url):
+        raise OSError("down")
+
+    assert fetch_chain(leaf.asn1, broken) == []
+    assert fetch_chain(leaf.asn1, lambda url: b"not a certificate") == []
+    assert fetch_chain(root.asn1, broken) == []  # a self-signed root has no issuer to find
+
+
+def test_default_fetch_refuses_private_addresses():
+    from nodetide.eidas.anchors import AnchorError, default_fetch
+
+    for url in ("http://127.0.0.1/ca.cer", "http://169.254.169.254/x", "file:///etc/passwd", "ftp://example.org/x"):
+        with pytest.raises(AnchorError):
+            default_fetch(url)
+
+
+def test_anchors_are_written_as_pem_named_by_fingerprint(tmp_path):
+    from nodetide.eidas.anchors import fingerprint, write_anchors
+
+    root = pki.make_ca("Root")
+    (path,) = write_anchors([root.asn1], tmp_path / "anchors")
+    assert path.name == fingerprint(root.asn1)[:16] + ".pem"
+    assert len(TrustStore.from_directory(tmp_path / "anchors").anchors) == 1

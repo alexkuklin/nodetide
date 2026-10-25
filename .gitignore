@@ -42,3 +42,6 @@ Thumbs.db
 # Test files
 .test-password
 identity-*.json
+
+# Signing testkit: virtualenv, isolated identity, attestation files (contain personal data)
+.testkit/

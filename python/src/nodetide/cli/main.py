@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -18,10 +19,14 @@ from nodetide.core.trust import (
 from nodetide.content.mime import create_text_message
 
 
+def data_dir() -> Path:
+    """Where the CLI keeps its database: $NODETIDE_HOME, else ~/.nodetide."""
+    return Path(os.environ["NODETIDE_HOME"]) if os.environ.get("NODETIDE_HOME") else Path.home() / ".nodetide"
+
+
 def get_storage() -> Storage:
     """Get the default storage."""
-    data_dir = Path.home() / ".nodetide"
-    return Storage.open(data_dir / "nodetide.db")
+    return Storage.open(data_dir() / "nodetide.db")
 
 
 def get_default_identity(storage: Storage) -> Identity | None:
