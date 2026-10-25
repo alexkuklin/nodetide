@@ -11,12 +11,14 @@ else
 fi
 
 # Pin the independent verification service's issuer identity (public hash, written by the verifier container).
+# That one identity attests email and phone; the node trusts it for those two claim types and nothing else.
 if [ -z "${NODETIDE_OIDC_EMAIL_ISSUERS:-}" ] && [ -s /issuer/email-issuer ]; then
-    NODETIDE_OIDC_EMAIL_ISSUERS=$(tr -d '[:space:]' < /issuer/email-issuer)
-    export NODETIDE_OIDC_EMAIL_ISSUERS
-    echo "email attestations trusted from issuer ${NODETIDE_OIDC_EMAIL_ISSUERS}"
+    ISSUER=$(tr -d '[:space:]' < /issuer/email-issuer)
+    export NODETIDE_OIDC_EMAIL_ISSUERS="$ISSUER"
+    export NODETIDE_OIDC_PHONE_ISSUERS="${NODETIDE_OIDC_PHONE_ISSUERS:-$ISSUER}"
+    echo "email and phone attestations trusted from issuer $ISSUER"
 else
-    echo "email attestations trusted from: ${NODETIDE_OIDC_EMAIL_ISSUERS:-nobody}"
+    echo "email attestations trusted from: ${NODETIDE_OIDC_EMAIL_ISSUERS:-nobody}; phone: ${NODETIDE_OIDC_PHONE_ISSUERS:-nobody}"
 fi
 
 exec python -m nodetide.cli.main api start --host 0.0.0.0 --port 4557

@@ -3,6 +3,30 @@
 Progress notes kept between sessions. Newest first. Each entry says what changed, why, and what is
 still open, so a new session can pick up without re-deriving context.
 
+## 2026-10-25 (verification) - SMS codes through a modem gateway
+
+### Added
+- **Phone verification** in the verification service (`sms_code`, assurance `low`, 6-digit codes, 10 minutes): the service
+  queues the SMS (`verifiers/sms.py`, in memory, leased with retries) instead of sending it. `CodeVerifier` is now the shared
+  base of `EmailVerifier` and `PhoneVerifier`; the API is generic over `/api/verify/{email|phone}/start|confirm` plus
+  `GET .../{verification_id}/status` (queued | sent | failed + reason). Enabled by `NODETIDE_SMS_GATEWAY_TOKEN`;
+  `NODETIDE_PHONE_ALLOWED` is the number mask (default `^\+359[0-9]{9}$`), rate limits 3/number, 3/identity, 10 total per hour.
+- **Gateway endpoints**, bearer token (sha256-compared in constant time): `GET /api/gateway/sms/pending` (long poll, up to 30 s)
+  and `POST /api/gateway/sms/{id}/result`. Chosen over a message broker: outbound-only HTTPS works behind NAT, nothing new to run.
+- **`tools/sms-gateway/sms_gateway.py`**: the script for the home server with the USB modem (AT commands, text mode, pyserial).
+  Modem-side safety: destination mask (default `+359` mobile), 10 per rolling 24 h (counted before the attempt, persisted in a
+  0600 ledger with hashed numbers), 3 per number, ASCII-only text up to 160 characters, an id is never sent twice, expired
+  messages are not sent, a wrong token stops it. `--dry-run [--dry-run-file]` and `--selftest-modem`. README with modem,
+  ModemManager and systemd notes. 46 tests (`test_phone_verification`, `test_sms_gateway`) incl. a scripted fake serial port.
+- Bridge: `NODETIDE_OIDC_PHONE_ISSUERS` (phone claims only); the test stack pins the verifier's issuer for email and phone.
+  Wallet: add a phone claim, verify by SMS (shows queued / sent / refused). `init.sh` generates `SMS_GATEWAY_TOKEN`
+  (`--upgrade` adds it). Smoke test covers the SMS path via the gateway script in dry-run mode.
+
+### Open
+- Not tried with a real modem yet (nothing to test against here): the AT handling is tested against a scripted serial port only.
+  Expect device-specific quirks (SIM PIN, `AT+CSCS`, message-sent timing); `--selftest-modem` is the first thing to run.
+- The queue is in memory: a service restart drops pending SMS (the codes expire anyway).
+
 ## 2026-10-25 (trust) - email verification is an independent service
 
 ### Changed

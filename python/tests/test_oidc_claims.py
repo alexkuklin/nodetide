@@ -373,6 +373,9 @@ async def test_nothing_is_trusted_unless_named(bridge):
     named = OIDCConfig(issuer="https://b.example.org", clients={}, email_issuers=["a" * 64])
     rules = default_claim_rules(app, named)
     assert rules["email"].issuers == frozenset({"a" * 64}) and "phone" not in rules
+    phones = OIDCConfig(issuer="https://b.example.org", clients={}, phone_issuers=["c" * 64])
+    rules = default_claim_rules(app, phones)
+    assert rules["phone"].issuers == frozenset({"c" * 64}) and "email" not in rules
 
 
 def test_email_issuers_come_from_the_environment_and_must_be_hashes(monkeypatch):

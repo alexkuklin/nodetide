@@ -1,4 +1,4 @@
-"""Email verification: prove control of an inbox, get a `low` assurance attestation.
+"""One-time-code verification: prove control of an inbox (email) or a phone number (SMS), get a `low` assurance attestation.
 
 Flow
   1. The holder proves it controls a key of the identity (an AuthAssertion bound
@@ -83,29 +83,48 @@ class PendingEmail:
     expires_at: int
     chain: Sigchain  # the holder's chain as checked at start (may not be stored on this node)
     attempts: int = 0
+    ref: str = ""  # the channel's own handle for the delivery (the SMS queue id)
 
 
 def _hash_code(verification_id: str, code: str) -> str:
     return hashlib.sha256(f"{verification_id}:{code}".encode()).hexdigest()
 
 
-class EmailVerifier:
-    method = "email_code"
-    claim_type = "email"
-    assurance = "low"
+class CodeVerifier:
+    """Checks the claim, sends a one-time code over some channel, issues the attestation when it comes back.
 
-    def __init__(
-        self,
-        storage: Storage,
-        issuer: NodeIssuer,
-        sender: MailSender,
-        clock: Callable[[], float] = time.time,
-    ):
-        self.storage, self.issuer, self.sender, self._clock = storage, issuer, sender, clock
+    Subclasses set method/claim_type/assurance, the code shape and rate limits, and implement `_deliver`
+    (and optionally `_validate_value`).
+    """
+
+    method = "code"
+    claim_type = ""
+    assurance = "low"
+    code_alphabet = CODE_ALPHABET
+    code_length = CODE_LENGTH
+    code_ttl = CODE_TTL
+    per_address = PER_ADDRESS
+    per_identity = PER_IDENTITY
+    global_limit = GLOBAL
+
+    def __init__(self, storage: Storage, issuer: NodeIssuer, clock: Callable[[], float] = time.time):
+        self.storage, self.issuer, self._clock = storage, issuer, clock
         self._pending: dict[str, PendingEmail] = {}
-        self._by_address = SlidingWindow(*PER_ADDRESS, clock)
-        self._by_identity = SlidingWindow(*PER_IDENTITY, clock)
-        self._global = SlidingWindow(*GLOBAL, clock)
+        self._by_address = SlidingWindow(*self.per_address, clock)
+        self._by_identity = SlidingWindow(*self.per_identity, clock)
+        self._global = SlidingWindow(*self.global_limit, clock)
+
+    def _validate_value(self, value: str) -> None:
+        """Reject values this verifier will not send to (raise VerificationError)."""
+
+    async def _deliver(self, pending: PendingEmail, code: str) -> None:
+        raise NotImplementedError
+
+    def delivery_status(self, verification_id: str) -> dict[str, str]:
+        """How far the code got. Channels with their own queue (SMS) override this."""
+        if verification_id not in self._pending:
+            raise VerificationError("unknown_verification", "Unknown or finished verification", 404)
+        return {"delivery": "sent"}
 
     def _now(self) -> int:
         return int(self._clock())
@@ -120,7 +139,7 @@ class EmailVerifier:
     async def start(self, document: ClaimDocument, chain: Sigchain) -> tuple[str, int]:
         """Check the claim and email a code. Returns (verification_id, expires_at)."""
         if document.claim_type != self.claim_type:
-            raise VerificationError("unsupported_claim_type", "This verifier only handles email claims")
+            raise VerificationError("unsupported_claim_type", f"This verifier only handles {self.claim_type} claims")
         valid, err = chain.verify()
         if not valid or chain.identity_hash != document.identity:
             raise VerificationError("invalid_sigchain", err or "Sigchain does not match the identity")
@@ -137,6 +156,7 @@ class EmailVerifier:
         if len(self._pending) >= MAX_PENDING:
             raise RateLimited("The verifier is busy, try again later")
         address = str(document.value)
+        self._validate_value(address)
         # Count every attempt against all three limits, so no single check hides the others.
         allowed = [
             self._by_address.allow(address.lower()),
@@ -146,7 +166,7 @@ class EmailVerifier:
         if not all(allowed):
             raise RateLimited()
 
-        code = "".join(secrets.choice(CODE_ALPHABET) for _ in range(CODE_LENGTH))
+        code = "".join(secrets.choice(self.code_alphabet) for _ in range(self.code_length))
         verification_id = secrets.token_urlsafe(24)
         # A new request for the same claim replaces the older code.
         for vid in [v for v, p in self._pending.items()
@@ -158,24 +178,16 @@ class EmailVerifier:
             claim_id=document.claim_id,
             address=address,
             code_hash=_hash_code(verification_id, code),
-            expires_at=self._now() + CODE_TTL,
+            expires_at=self._now() + self.code_ttl,
             chain=chain,
         )
         self._pending[verification_id] = pending
 
-        issuer_name = self.issuer.name or "Nodetide verifier"
-        body = (
-            f"{issuer_name} received a request to verify this email address for the "
-            f"Nodetide identity {document.identity[:12]}...\n\n"
-            f"Verification code: {code}\n\n"
-            f"The code is valid for {CODE_TTL // 60} minutes. If you did not ask for this, "
-            f"ignore this message; nothing will happen.\n"
-        )
         try:
-            await self.sender.send(address, f"{issuer_name}: your verification code", body)
-        except MailError as e:
-            del self._pending[verification_id]
-            raise VerificationError("mail_failed", str(e), 503) from e
+            await self._deliver(pending, code)
+        except VerificationError:
+            self._pending.pop(verification_id, None)
+            raise
         return verification_id, pending.expires_at
 
     def confirm(self, verification_id: str, code: str) -> Attestation:
@@ -212,3 +224,33 @@ class EmailVerifier:
         )
         self.storage.save_attestation(attestation.id, attestation.to_dict())
         return attestation
+
+
+class EmailVerifier(CodeVerifier):
+    method = "email_code"
+    claim_type = "email"
+    assurance = "low"
+
+    def __init__(
+        self,
+        storage: Storage,
+        issuer: NodeIssuer,
+        sender: MailSender,
+        clock: Callable[[], float] = time.time,
+    ):
+        super().__init__(storage, issuer, clock)
+        self.sender = sender
+
+    async def _deliver(self, pending: PendingEmail, code: str) -> None:
+        issuer_name = self.issuer.name or "Nodetide verifier"
+        body = (
+            f"{issuer_name} received a request to verify this email address for the "
+            f"Nodetide identity {pending.identity[:12]}...\n\n"
+            f"Verification code: {code}\n\n"
+            f"The code is valid for {self.code_ttl // 60} minutes. If you did not ask for this, "
+            f"ignore this message; nothing will happen.\n"
+        )
+        try:
+            await self.sender.send(pending.address, f"{issuer_name}: your verification code", body)
+        except MailError as e:
+            raise VerificationError("mail_failed", str(e), 503) from e

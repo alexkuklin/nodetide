@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
+import hmac
+import time
+
 from aiohttp import web
 
 from nodetide.api.auth.challenges import ChallengeStore
@@ -9,43 +14,48 @@ from nodetide.api.claims import error, read_object, resolve_chain
 from nodetide.core.auth import CLOCK_SKEW, verify_assertion
 from nodetide.core.claims import ClaimDocument, ClaimError
 from nodetide.core.storage import Storage
-from nodetide.verifiers import EmailVerifier, VerificationError
+from nodetide.verifiers import CodeVerifier, SmsOutbox, VerificationError
 
 PURPOSE = "claim_verification"
 
 
+def _verifier(request: web.Request) -> CodeVerifier | None:
+    return request.app.get("verifiers", {}).get(request.match_info.get("kind", ""))
+
+
 async def issuer_info(request: web.Request) -> web.Response:
     """GET /verify/issuer - who issues attestations here, and for which claims."""
-    verifier: EmailVerifier | None = request.app.get("email_verifier")
-    if verifier is None:
+    verifiers: dict[str, CodeVerifier] = request.app.get("verifiers", {})
+    if not verifiers:
         return error("not_configured", "This service does not verify claims", 404)
+    issuer = next(iter(verifiers.values())).issuer
     return web.json_response({
-        "issuer": verifier.issuer.identity_hash,
-        "name": verifier.issuer.name,
+        "issuer": issuer.identity_hash,
+        "name": issuer.name,
         "audience": request.app.get("auth_audience"),
         # so a holder can present its attestations anywhere without a lookup
-        "sigchain": verifier.issuer.identity.sigchain.to_list(),
+        "sigchain": issuer.identity.sigchain.to_list(),
         "methods": [{
-            "method": verifier.method,
-            "claim_type": verifier.claim_type,
-            "assurance": verifier.assurance,
-            "start": "/api/verify/email/start",
-            "confirm": "/api/verify/email/confirm",
-        }],
+            "method": v.method,
+            "claim_type": v.claim_type,
+            "assurance": v.assurance,
+            "start": f"/api/verify/{kind}/start",
+            "confirm": f"/api/verify/{kind}/confirm",
+        } for kind, v in verifiers.items()],
     })
 
 
-async def email_start(request: web.Request) -> web.Response:
-    """POST /verify/email/start - {"document": {...}, "assertion": {...}, "sigchain": [...]?}
+async def start(request: web.Request) -> web.Response:
+    """POST /verify/{email|phone}/start - {"document": {...}, "assertion": {...}, "sigchain": [...]?}
 
-    The assertion is an AuthAssertion for this node's audience (challenge from
+    The assertion is an AuthAssertion for this service's audience (challenge from
     /auth/challenge) whose signed claims bind it to this claim:
     {"purpose": "claim_verification", "claim_id": "<claim id>"}.
     """
-    verifier: EmailVerifier | None = request.app.get("email_verifier")
+    verifier = _verifier(request)
     audience = request.app.get("auth_audience")
     if verifier is None or not audience:
-        return error("not_configured", "Email verification is not enabled", 501)
+        return error("not_configured", "This kind of verification is not enabled", 404)
 
     storage: Storage = request.app["storage"]
     challenges: ChallengeStore = request.app["challenge_store"]
@@ -92,15 +102,16 @@ async def email_start(request: web.Request) -> web.Response:
     return web.json_response({
         "verification_id": verification_id,
         "expires_at": expires_at,
-        "message": "A verification code was sent to the address.",
+        "message": "A verification code was sent." if verifier.claim_type == "email"
+        else "A verification code was queued for SMS.",
     }, status=202)
 
 
-async def email_confirm(request: web.Request) -> web.Response:
-    """POST /verify/email/confirm - {"verification_id": "...", "code": "..."}"""
-    verifier: EmailVerifier | None = request.app.get("email_verifier")
+async def confirm(request: web.Request) -> web.Response:
+    """POST /verify/{email|phone}/confirm - {"verification_id": "...", "code": "..."}"""
+    verifier = _verifier(request)
     if verifier is None:
-        return error("not_configured", "Email verification is not enabled", 501)
+        return error("not_configured", "This kind of verification is not enabled", 404)
     data = await read_object(request)
     if isinstance(data, web.Response):
         return data
@@ -116,7 +127,85 @@ async def email_confirm(request: web.Request) -> web.Response:
     )
 
 
+async def delivery_status(request: web.Request) -> web.Response:
+    """GET /verify/{email|phone}/{verification_id}/status - did the code leave? (the id is the capability)"""
+    verifier = _verifier(request)
+    if verifier is None:
+        return error("not_configured", "This kind of verification is not enabled", 404)
+    try:
+        return web.json_response(verifier.delivery_status(request.match_info["verification_id"]))
+    except VerificationError as e:
+        return error(e.code, e.message, e.status)
+
+
+# --- SMS gateway: a script next to a modem fetches the queue and reports back ---------------------------
+
+
+MAX_WAIT = 30
+
+
+def _gateway_authorized(request: web.Request) -> bool:
+    expected: bytes | None = request.app.get("gateway_token_digest")
+    header = request.headers.get("Authorization", "")
+    if expected is None or not header.lower().startswith("bearer "):
+        return False
+    supplied = hashlib.sha256(header[7:].strip().encode()).digest()
+    return hmac.compare_digest(supplied, expected)
+
+
+def _gateway_denied(request: web.Request) -> web.Response | None:
+    outbox: SmsOutbox | None = request.app.get("sms_outbox")
+    if outbox is None or request.app.get("gateway_token_digest") is None:
+        return error("not_configured", "No SMS gateway is configured", 404)
+    if not _gateway_authorized(request):
+        resp = error("unauthorized", "Gateway token required", 401)
+        resp.headers["WWW-Authenticate"] = 'Bearer realm="sms-gateway"'
+        return resp
+    return None
+
+
+async def gateway_pending(request: web.Request) -> web.Response:
+    """GET /gateway/sms/pending?wait=25&max=5 - long poll for messages to send."""
+    denied = _gateway_denied(request)
+    if denied is not None:
+        return denied
+    outbox: SmsOutbox = request.app["sms_outbox"]
+    try:
+        wait = min(max(float(request.query.get("wait", 20)), 0.0), MAX_WAIT)
+        limit = min(max(int(request.query.get("max", 5)), 1), 10)
+    except ValueError:
+        return error("invalid_request", "wait and max must be numbers", 400)
+    deadline = time.monotonic() + wait
+    while True:
+        jobs = outbox.lease(limit)
+        remaining = deadline - time.monotonic()
+        if jobs or remaining <= 0:
+            break
+        await outbox.wait_for_work(remaining)
+    return web.json_response({"messages": [
+        {"id": j.id, "to": j.to, "text": j.text, "expires_at": int(j.expires_at)} for j in jobs]})
+
+
+async def gateway_result(request: web.Request) -> web.Response:
+    """POST /gateway/sms/{id}/result - {"status": "sent"|"failed"|"rejected", "reason": "..."}"""
+    denied = _gateway_denied(request)
+    if denied is not None:
+        return denied
+    data = await read_object(request)
+    if isinstance(data, web.Response):
+        return data
+    status, reason = data.get("status"), data.get("reason", "")
+    if status not in ("sent", "failed", "rejected") or not isinstance(reason, str):
+        return error("invalid_request", "status must be sent, failed or rejected", 400)
+    if not request.app["sms_outbox"].report(request.match_info["id"], status, reason):
+        return error("unknown_message", "Unknown or already reported message", 404)
+    return web.json_response({"ok": True})
+
+
 def setup_verifier_routes(app: web.Application) -> None:
     app.router.add_get("/api/verify/issuer", issuer_info)
-    app.router.add_post("/api/verify/email/start", email_start)
-    app.router.add_post("/api/verify/email/confirm", email_confirm)
+    app.router.add_post("/api/verify/{kind}/start", start)
+    app.router.add_post("/api/verify/{kind}/confirm", confirm)
+    app.router.add_get("/api/verify/{kind}/{verification_id}/status", delivery_status)
+    app.router.add_get("/api/gateway/sms/pending", gateway_pending)
+    app.router.add_post("/api/gateway/sms/{id}/result", gateway_result)

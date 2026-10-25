@@ -66,6 +66,10 @@ VERIFIER_SITE=$(host_url "$NODE_SITE" verifier)
 ENV
         echo "added verification service settings (needs a DNS name: nt-verifier.$BASE)"
     fi
+    if ! grep -q '^SMS_GATEWAY_TOKEN=' .env; then
+        printf '\nSMS_GATEWAY_TOKEN=%s\n' "$(secret 32)" >> .env
+        echo "added the SMS gateway token (SMS_GATEWAY_TOKEN)"
+    fi
     . ./.env
     # config/ is not kept anywhere else: rebuild it from the secrets in .env
     write_clients "$OIDC_CLIENT_SECRET" "$GRAFANA_CLIENT_SECRET" "$RP_URL" "$GRAFANA_URL"
@@ -78,6 +82,7 @@ COOKIE_SECRET=$(cookie_secret)
 WALLET_PASSWORD=$(secret 18)
 GRAFANA_SECRET=$(secret 32)
 GRAFANA_ADMIN=$(secret 18)
+SMS_TOKEN=$(secret 32)
 
 if [ "$MODE" = local ]; then
     NODE_HOST=nt-node.localtest.me; RP_HOST=nt-rp.localtest.me; WALLET_HOST=nt-wallet.localtest.me; GRAFANA_HOST=nt-grafana.localtest.me; VERIFIER_HOST=nt-verifier.localtest.me
@@ -112,6 +117,7 @@ COOKIE_SECRET=$COOKIE_SECRET
 WALLET_PASSWORD=$WALLET_PASSWORD
 GRAFANA_CLIENT_SECRET=$GRAFANA_SECRET
 GRAFANA_ADMIN_PASSWORD=$GRAFANA_ADMIN
+SMS_GATEWAY_TOKEN=$SMS_TOKEN
 
 ALLOW_INSECURE=$ALLOW_INSECURE
 COOKIE_SECURE=$COOKIE_SECURE

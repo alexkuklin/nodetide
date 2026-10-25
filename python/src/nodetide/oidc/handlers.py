@@ -267,7 +267,7 @@ def default_claim_rules(app: web.Application, config: OIDCConfig) -> dict[str, C
     and trusts no issuer unless it is named: verifying your own claims proves nothing.
 
     email:      attested by an email issuer or a trusted issuer
-    phone:      only by trusted issuers
+    phone:      attested by a phone issuer or a trusted issuer
     legal_name: eIDAS qualified-signature proofs (if the node verifies them) or trusted issuers,
                 always at "high" assurance
     """
@@ -276,8 +276,9 @@ def default_claim_rules(app: web.Application, config: OIDCConfig) -> dict[str, C
     email_issuers = trusted | frozenset(config.email_issuers)
     if email_issuers:
         rules["email"] = ClaimRule("email", issuers=email_issuers)
-    if trusted:
-        rules["phone"] = ClaimRule("phone", issuers=trusted)
+    phone_issuers = trusted | frozenset(config.phone_issuers)
+    if phone_issuers:
+        rules["phone"] = ClaimRule("phone", issuers=phone_issuers)
     has_eidas = app.get("eidas_policy") is not None
     if trusted or has_eidas:
         rules["legal_name"] = ClaimRule(

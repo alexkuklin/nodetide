@@ -44,6 +44,7 @@ DATA_DIR = Path(os.environ.get("DATA_DIR", "/data"))
 STATE_FILE = DATA_DIR / "wallet.json"
 STATEMENT_DAYS = 7
 SIGNIN_TTL = 600
+CODE_CLAIMS = ("email", "phone")  # verified by the verification service with a one-time code
 
 
 class WalletError(Exception):
@@ -167,20 +168,20 @@ async def publish_forever(app: web.Application) -> None:
 async def start_email_verification(claim_id: str) -> dict[str, Any]:
     """Ask the verification service to email a code. The person reads the mail and types the code (confirm_email)."""
     document = wallet.document(claim_id)
-    if document.claim_type != "email":
-        raise WalletError("not an email claim")
+    if document.claim_type not in CODE_CLAIMS:
+        raise WalletError("only email and phone claims are verified with a code")
     identity = wallet.identity
     status, request = await verifier("POST", "/api/auth/challenge", json={})
     if status != 201:
         raise WalletError(f"the verification service refused a challenge: {request}", 502)
     assertion = create_assertion(request, identity.identity_hash or "", wallet.device, identity.sigchain.head_hash or "",
                                  claims={"purpose": "claim_verification", "claim_id": claim_id})
-    status, begun = await verifier("POST", "/api/verify/email/start", json={
+    status, begun = await verifier("POST", f"/api/verify/{document.claim_type}/start", json={
         "document": document.to_dict(), "assertion": assertion, "sigchain": identity.sigchain.to_list()})
     if status != 202:
         raise WalletError(f"verification not started: {begun.get('message', begun)}", 502)
     wallet.state.setdefault("verifications", {})[claim_id] = {
-        "verification_id": begun["verification_id"], "expires_at": begun["expires_at"]}
+        "verification_id": begun["verification_id"], "expires_at": begun["expires_at"], "kind": document.claim_type}
     wallet.save()
     return {"expires_at": begun["expires_at"], "message": begun.get("message", "")}
 
@@ -189,7 +190,7 @@ async def confirm_email(claim_id: str, code: str) -> dict[str, Any]:
     pending = wallet.state.get("verifications", {}).get(claim_id)
     if pending is None:
         raise WalletError("start the verification first")
-    status, confirmed = await verifier("POST", "/api/verify/email/confirm",
+    status, confirmed = await verifier("POST", f"/api/verify/{pending.get('kind', 'email')}/confirm",
                                        json={"verification_id": pending["verification_id"], "code": str(code).strip()})
     if status != 201:
         raise WalletError(confirmed.get("message", f"code not accepted: {confirmed}"), 502 if status >= 500 else 400)
@@ -391,6 +392,13 @@ async def api_claim_email(request: web.Request) -> web.Response:
     return done(request, {"claim_id": document.claim_id}, "email claim created")
 
 
+async def api_claim_phone(request: web.Request) -> web.Response:
+    data = await params(request)
+    document = wallet.add_claim("phone", str(data.get("number", "")).replace(" ", ""))
+    await publish()
+    return done(request, {"claim_id": document.claim_id}, "phone claim created")
+
+
 async def api_claim_name(request: web.Request) -> web.Response:
     data = await params(request)
     document = wallet.add_claim("legal_name", {"given_name": str(data.get("given", "")), "family_name": str(data.get("family", ""))})
@@ -401,14 +409,14 @@ async def api_claim_name(request: web.Request) -> web.Response:
 async def api_verify_email(request: web.Request) -> web.Response:
     """Step 1: the verification service emails a code."""
     started = await start_email_verification(request.match_info["id"])
-    return done(request, started, "A code was emailed. Type it below to finish.")
+    return done(request, started, "A code was sent. Type it below to finish.")
 
 
 async def api_confirm_email(request: web.Request) -> web.Response:
     """Step 2: the person types the code from the email."""
     data = await params(request)
     attestation = await confirm_email(request.match_info["id"], str(data.get("code", "")))
-    return done(request, {"attestation": attestation}, "Email verified.")
+    return done(request, {"attestation": attestation}, "Verified.")
 
 
 async def api_statement(request: web.Request) -> web.Response:
@@ -503,6 +511,22 @@ async def signin_link(request: web.Request) -> web.Response:
     return web.Response(text=signin_page(await signin_preview(link)), content_type="text/html")
 
 
+async def delivery_state(claim_id: str) -> str:
+    """Where the code is: for SMS it may still be in the gateway's queue, or have been refused."""
+    pending = wallet.state.get("verifications", {}).get(claim_id)
+    if not pending or pending.get("kind") != "phone":
+        return ""
+    try:
+        status, body = await verifier("GET", f"/api/verify/phone/{pending['verification_id']}/status")
+    except (WalletError, aiohttp.ClientError, asyncio.TimeoutError):
+        return "state unknown"
+    if status != 200:
+        return "state unknown"
+    if body.get("delivery") == "failed":
+        return f"the SMS could not be sent ({body.get('reason', 'unknown reason')}); send a new code later"
+    return {"queued": "waiting for the SMS gateway to pick it up", "sent": "SMS sent"}.get(body.get("delivery", ""), "state unknown")
+
+
 async def dashboard(request: web.Request) -> web.Response:
     view = state_view()
     identity = view["identity"]
@@ -513,13 +537,16 @@ async def dashboard(request: web.Request) -> web.Response:
         atts = "".join(f"<div>{esc(a['method'])} / {esc(a['assurance'])}{' (expired)' if a['expired'] else ''}: "
                        f"<span class='muted'>{esc(a['node_verdict'])}</span></div>" for a in c["attestations"]) or "none"
         cid = esc(c["claim_id"])
-        if c["claim_type"] == "email":
+        if c["claim_type"] in CODE_CLAIMS:
             waiting = c["claim_id"] in wallet.state.get("verifications", {})
+            how = "email" if c["claim_type"] == "email" else "SMS"
             actions = (f'<form method="post" action="/api/claims/{cid}/verify-email"><button>'
-                       f'{"Send a new code" if waiting else "Verify by email"}</button></form>')
+                       f'{"Send a new code" if waiting else f"Verify by {how}"}</button></form>')
             if waiting:
-                actions += (f'<form method="post" action="/api/claims/{cid}/confirm-email">Code from the email: '
-                            f'<input name="code" required maxlength="16" autocomplete="off" size="12"> <button>Confirm</button></form>')
+                note = await delivery_state(c["claim_id"])
+                actions += (f'<form method="post" action="/api/claims/{cid}/confirm-email">Code from the {how}: '
+                            f'<input name="code" required maxlength="16" autocomplete="off" size="12"> <button>Confirm</button></form>'
+                            + (f'<div class="muted">{esc(note)}</div>' if note else ""))
         else:
             download = f' <a href="/api/claims/{cid}/statement">download statement</a>' if c["has_statement"] else ""
             actions = (f'<form method="post" action="/api/claims/{cid}/statement"><button>Create statement to sign</button>{download}</form>'
@@ -534,12 +561,13 @@ async def dashboard(request: web.Request) -> web.Response:
 <h2>Claims</h2>{table}
 <h3>Add a claim</h3>
 <form method="post" action="/api/claims/email">Email: <input type="email" name="address" required> <button>Add</button></form>
+<form method="post" action="/api/claims/phone">Phone (international format): <input type="text" name="number" required placeholder="+359..."> <button>Add</button></form>
 <form method="post" action="/api/claims/name">Legal name as on your certificate:
 <input type="text" name="given" placeholder="given name" required> <input type="text" name="family" placeholder="family name" required> <button>Add</button></form>
 <h2>Approve a sign-in</h2>
 <form method="post" action="/api/signin/preview">Sign-in address from the application:
 <input type="url" name="login_url" required placeholder="{esc(NODE_URL)}/oidc/login/..."> <button>Look at it</button></form>
-<p class="muted">Email claims are verified by an independent service ({esc(VERIFIER_URL or 'not configured')}): it emails you a code, you type it here.</p>"""
+<p class="muted">Email and phone claims are verified by an independent service ({esc(VERIFIER_URL or 'not configured')}): it sends you a code by email or SMS, you type it here.</p>"""
     return web.Response(text=layout(body, request), content_type="text/html")
 
 
@@ -555,6 +583,7 @@ def build_app() -> web.Application:
     app.router.add_get("/signin", signin_link)
     app.router.add_get("/api/state", api_state)
     app.router.add_post("/api/claims/email", api_claim_email)
+    app.router.add_post("/api/claims/phone", api_claim_phone)
     app.router.add_post("/api/claims/name", api_claim_name)
     app.router.add_post("/api/claims/{id}/verify-email", api_verify_email)
     app.router.add_post("/api/claims/{id}/confirm-email", api_confirm_email)

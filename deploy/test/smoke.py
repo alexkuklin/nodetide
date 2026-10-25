@@ -185,6 +185,36 @@ async def sign_in(env: dict[str, str], resolver, wallet, check: Check, share_cla
     return claims
 
 
+async def phone_check(http, env, wallet, identity, verifier_info, check: "Check") -> None:
+    token = env.get("SMS_GATEWAY_TOKEN")
+    if not token:
+        print("  skip  no SMS_GATEWAY_TOKEN in .env")
+        return
+    number = "+359881234567"
+    state = await wallet("GET", "/api/state")
+    claim = next((c for c in state["claims"] if c["claim_type"] == "phone" and c["value"] == number), None)
+    claim_id = claim["claim_id"] if claim else (await wallet("POST", "/api/claims/phone", {"number": number}))["claim_id"]
+    sink = SMOKE / "sms.log"
+    SMOKE.mkdir(exist_ok=True)
+    sink.unlink(missing_ok=True)
+    (SMOKE / "sms-ledger.json").unlink(missing_ok=True)  # a fresh gateway ledger for every run
+    await wallet("POST", f"/api/claims/{claim_id}/verify-email")
+    # the gateway script runs next to the modem; here it runs on this machine with the modem replaced by a file
+    gateway = Path(__file__).resolve().parents[2] / "tools" / "sms-gateway" / "sms_gateway.py"
+    proc = await asyncio.create_subprocess_exec(
+        sys.executable, str(gateway), "--server", f"http://127.0.0.1:{env.get('VERIFIER_PORT', '4575')}", "--dry-run",
+        "--dry-run-file", str(sink), "--once", "--state", str(SMOKE / "sms-ledger.json"),
+        env={**os.environ, "SMS_GATEWAY_TOKEN": token}, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
+    out, _ = await proc.communicate()
+    check.expect(proc.returncode == 0 and sink.exists(), "the gateway fetched the queued SMS and 'sent' it", out.decode()[-200:] if proc.returncode else "")
+    sent = [json.loads(line) for line in sink.read_text().splitlines()] if sink.exists() else []
+    check.expect(len(sent) == 1 and sent[0]["to"] == number, "exactly one SMS, to the claimed number")
+    code = re.search(r"code: ([0-9]{6})", sent[0]["text"]).group(1) if sent else ""
+    attested = await wallet("POST", f"/api/claims/{claim_id}/confirm-email", {"code": code})
+    check.expect(attested["attestation"]["method"] == "sms_code" and attested["attestation"]["issuer"] == verifier_info["issuer"],
+                 "phone claim verified with the SMS code, signed by the verification service")
+
+
 def mail_url(env: dict[str, str]) -> str:
     """Where the verifier's mail lands. The catch-all mailbox UI is bound to this machine's loopback."""
     return os.environ.get("SMOKE_MAIL_URL") or f"http://127.0.0.1:{env.get('MAIL_PORT', '4573')}"
@@ -253,6 +283,9 @@ async def run() -> int:
         check.expect(attested["attestation"]["method"] == "email_code", "email claim verified with the code from the email")
         check.expect(attested["attestation"]["issuer"] == verifier_info["issuer"], "the attestation is signed by the verification service's own identity")
         check.expect(attested["attestation"]["issuer"] != identity, "and not by the holder")
+
+        print("phone (SMS through the gateway script, dry run)")
+        await phone_check(http, env, wallet, identity, verifier_info, check)
 
         if eid:
             name_claim = next((c for c in state["claims"] if c["claim_type"] == "legal_name"), None)

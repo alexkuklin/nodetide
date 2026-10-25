@@ -78,6 +78,9 @@ services:
       NODETIDE_SMTP_USER: ${SMTP_USER:-}
       NODETIDE_SMTP_PASSWORD: ${SMTP_PASSWORD:-}
       NODETIDE_EMAIL_FROM: ${EMAIL_FROM:-verify@${VERIFIER_HOST}}
+      # SMS codes go through a gateway with a modem (tools/sms-gateway) that fetches them with this token
+      NODETIDE_SMS_GATEWAY_TOKEN: ${SMS_GATEWAY_TOKEN:-}
+      NODETIDE_PHONE_ALLOWED: ${PHONE_ALLOWED:-}   # empty = the service's default: Bulgarian mobile numbers only
     volumes:
       - verifier-data:/data
       - issuer-share:/share

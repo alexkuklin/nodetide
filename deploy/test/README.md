@@ -137,3 +137,12 @@ shared file and the node's entrypoint pins it as `NODETIDE_OIDC_EMAIL_ISSUERS`, 
   http://localhost:4573.
 - To receive real mail set `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURITY` (starttls|ssl|none), `SMTP_USER`, `SMTP_PASSWORD` and
   `EMAIL_FROM` in `.env` on the server, then `docker compose up -d verifier`.
+
+## SMS codes (phone claims)
+
+The verification service also verifies **phone** claims: it queues an SMS and a gateway script with a USB modem
+(`tools/sms-gateway/`, runs anywhere, only outbound HTTPS) fetches and sends it. `init.sh` generates
+`SMS_GATEWAY_TOKEN` in `.env` (an existing server gets it from `init.sh --upgrade`); the same value goes to the gateway.
+Numbers must match `PHONE_ALLOWED` (default `^\+359[0-9]{9}$`), and the gateway enforces its own mask and a count limit
+(10 per 24 h by default). The wallet shows whether the SMS is queued, sent or was refused. Without a gateway the
+messages stay queued and expire. `python3 smoke.py run` exercises the whole path with the gateway script in dry-run mode.
