@@ -7,8 +7,8 @@ still open, so a new session can pick up without re-deriving context.
 
 ### Added
 - **`deploy/test/terraform/`**: one Hetzner Cloud server (cloud-init installs Docker, creates the `deploy` user, key-only
-  ssh), firewall (22/80/443/icmp), ssh key, optional A/AAAA records via `hcloud_zone_rrset`. Remote state in an
-  S3-compatible bucket (Hetzner Object Storage). Provider lock file includes linux/darwin hashes.
+  ssh), firewall (22/80/443/icmp), ssh key, optional A/AAAA records via `hcloud_zone_rrset`. Remote state in the
+  existing AWS S3 bucket `nodetide-terraform-state` (shared with distriblog-infra, key `nodetide-test/terraform.tfstate`). Provider lock file includes linux/darwin hashes.
 - **Availability-aware placement** (`modules/placement`, pure module with 10 offline `terraform test` cases): picks the
   first usable (server type, location) from preference lists using `hcloud_server_types[].locations[].available` /
   deprecation; fails with a per-pair table when nothing is available. The `hcloud_datacenters` data source was NOT used:

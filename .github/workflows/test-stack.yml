@@ -36,8 +36,8 @@ env:
   TF_IN_AUTOMATION: "1"
   TF_INPUT: "0"
   HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
-  AWS_ACCESS_KEY_ID: ${{ secrets.TF_STATE_ACCESS_KEY }}
-  AWS_SECRET_ACCESS_KEY: ${{ secrets.TF_STATE_SECRET_KEY }}
+  AWS_ACCESS_KEY_ID: ${{ vars.AWS_ACCESS_KEY_ID }}
+  AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
   TF_VAR_ssh_public_key: ${{ vars.DEPLOY_SSH_PUBLIC_KEY }}
   TF_VAR_domain: ${{ vars.TEST_DOMAIN }}
   TF_VAR_dns_zone: ${{ vars.TEST_DNS_ZONE }}
@@ -60,16 +60,10 @@ jobs:
           for v in HCLOUD_TOKEN AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY TF_VAR_ssh_public_key; do
             [ -n "${!v}" ] || missing="$missing $v"
           done
-          for v in TF_STATE_BUCKET TF_STATE_ENDPOINT; do
-            [ -n "${!v}" ] || missing="$missing $v"
-          done
           if [ -n "$missing" ]; then
             echo "::error::missing secrets/variables:$missing (see deploy/test/terraform/README.md)"
             exit 1
           fi
-        env:
-          TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
-          TF_STATE_ENDPOINT: ${{ vars.TF_STATE_ENDPOINT }}
 
       - uses: hashicorp/setup-terraform@v3
         with:
@@ -81,14 +75,7 @@ jobs:
         run: terraform init -backend=false && terraform test
 
       - name: Init
-        env:
-          TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
-          TF_STATE_ENDPOINT: ${{ vars.TF_STATE_ENDPOINT }}
-        run: |
-          terraform init \
-            -backend-config="bucket=$TF_STATE_BUCKET" \
-            -backend-config="key=nodetide-test/terraform.tfstate" \
-            -backend-config="endpoints={s3=\"$TF_STATE_ENDPOINT\"}"
+        run: terraform init
 
       - name: Validate
         run: terraform validate

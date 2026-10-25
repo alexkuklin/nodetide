@@ -35,13 +35,12 @@ wait for an approval click.
 | Kind | Name | What | Where it comes from |
 |---|---|---|---|
 | secret | `HCLOUD_TOKEN` | Hetzner Cloud API token, **Read & Write** | Hetzner Console -> your project -> Security -> API tokens |
-| secret | `TF_STATE_ACCESS_KEY` / `TF_STATE_SECRET_KEY` | S3 credentials for the state bucket | Hetzner Console -> Object Storage -> Security credentials |
-| variable | `TF_STATE_BUCKET` | state bucket name | create a **private** bucket in Object Storage |
-| variable | `TF_STATE_ENDPOINT` | e.g. `https://fsn1.your-objectstorage.com` | same region as the bucket |
+| variable | `AWS_ACCESS_KEY_ID` | access key ID (an identifier, not a secret: keep it a variable so it stays visible) | IAM user with read/write on `nodetide-terraform-state` (key `nodetide-test/*`) |
+| secret | `AWS_SECRET_ACCESS_KEY` | the matching secret key | same IAM access key |
 | variable | `DEPLOY_SSH_PUBLIC_KEY` | public half of the deploy key | see below |
 | secret | `DEPLOY_SSH_PRIVATE_KEY` | private half (only for `deploy_app`) | see below |
-| variable | `TEST_DOMAIN` | e.g. `test.example.org` (optional for plan/apply; required for `deploy_app`) | your domain |
-| variable | `TEST_DNS_ZONE` | Hetzner DNS zone containing it, e.g. `example.org` (optional: empty = create the DNS records yourself) | Hetzner Console -> DNS |
+| variable | `TEST_DOMAIN` | FQDN without trailing dot, e.g. `test.example.org`; the hosts become `nt-node.<it>`, `nt-rp.<it>`, `nt-wallet.<it>` (optional for plan/apply; required for `deploy_app`) | your domain |
+| variable | `TEST_DNS_ZONE` | Hetzner DNS zone that is `TEST_DOMAIN` itself or a parent of it, e.g. `example.org` (optional: empty = create the DNS records yourself) | Hetzner Console -> DNS |
 
 Commands (with the `gh` CLI, run once):
 
@@ -55,11 +54,9 @@ shred -u nodetide-test-deploy 2>/dev/null || rm -P nodetide-test-deploy   # keep
 # 2. Hetzner token (prompts, so it does not land in shell history)
 gh secret set HCLOUD_TOKEN
 
-# 3. state bucket
-gh variable set TF_STATE_BUCKET   --body my-nodetide-tfstate
-gh variable set TF_STATE_ENDPOINT --body https://fsn1.your-objectstorage.com
-gh secret   set TF_STATE_ACCESS_KEY
-gh secret   set TF_STATE_SECRET_KEY
+# 3. state bucket: AWS S3 `nodetide-terraform-state` (shared with distriblog-infra)
+gh variable set AWS_ACCESS_KEY_ID --body AKIA...
+gh secret   set AWS_SECRET_ACCESS_KEY
 
 # 4. optional: domain and DNS
 gh variable set TEST_DOMAIN   --body test.example.org
@@ -67,7 +64,7 @@ gh variable set TEST_DNS_ZONE --body example.org
 ```
 
 Use a Hetzner project dedicated to testing: the token can create and delete anything in it. State contains the
-server IPs only (no secrets are managed by Terraform), but keep the bucket private anyway.
+server IPs only (no secrets are managed by Terraform).
 
 ## Running it
 
@@ -89,7 +86,7 @@ Without a domain the server still comes up; deploy by hand with `deploy/test/dep
 ```sh
 cp terraform.tfvars.example terraform.tfvars        # set ssh_public_key (and domain/dns_zone)
 export HCLOUD_TOKEN=...
-terraform init -backend=false      # local state; or pass the same -backend-config values as the workflow
+terraform init -backend=false      # local state; omit the flag (with AWS credentials set) to use the shared S3 state
 terraform plan
 ```
 
