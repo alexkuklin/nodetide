@@ -1,0 +1,15 @@
+{
+  "description": "CA certificates the eID notary trusts, as links to where their providers publish them. Nothing is stored in the repository: fetch-anchors.py downloads each one and refuses it unless its SHA-256 fingerprint is the pinned one. Each pin was also found in the EU trusted list of the member state, as a granted qualified-certificate service.",
+  "trusted_list": "https://crc.bg/files/_en/TSL_BG.xml",
+  "trusted_list_pointer": "https://ec.europa.eu/tools/lotl/eu-lotl.xml",
+  "anchors": [
+    {
+      "name": "B-Trust Operational Qualified CA (BORICA AD, Bulgaria)",
+      "url": "https://ca.b-trust.org/repository/B-TrustOperationalQCA_DER.crt",
+      "sha256": "499a9ca8b47ee84437f90b96fb40413ea293f9b3942a160837a0c67b0ec5ba0c",
+      "published_at": "https://www.b-trust.bg/en/queries/certification-chains-installation",
+      "trusted_list_service": "granted, qualified certificates (QC)",
+      "valid_until": "2033-05-31"
+    }
+  ]
+}

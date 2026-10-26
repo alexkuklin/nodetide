@@ -3,6 +3,27 @@
 Progress notes kept between sessions. Newest first. Each entry says what changed, why, and what is
 still open, so a new session can pick up without re-deriving context.
 
+## 2026-10-26 (trust anchors) - published links with pinned fingerprints instead of certificates in the repo
+
+### Added
+- **`deploy/test/trust-anchors.json`**: the published list of links to the CAs' own certificate downloads, each with the SHA-256 it must have.
+  **`fetch-anchors.py`** (stdlib only) downloads them into `anchors/` (git-ignored), refuses any mismatch, and cross-checks every run against the
+  EU trusted list of the country (`--strict`: stop unless the pinned certificate is a *granted QC* service). The deploy workflow runs it before
+  every deploy; `deploy.sh` passes `ANCHORS_REV` so the verifier is recreated when the anchors change. 17 tests.
+- First entry: **B-Trust Operational Qualified CA** (BORICA AD), `https://ca.b-trust.org/repository/B-TrustOperationalQCA_DER.crt`, sha256
+  `499a9ca8...ba0c`, valid to 2033-05-31. Verified by downloading it from BORICA's repository and finding the same fingerprint in the Bulgarian
+  trusted list (`https://crc.bg/files/_en/TSL_BG.xml`, from the EU list of trusted lists) as type QC, status granted.
+
+### Findings
+- The Bulgarian list grants the **intermediate** "B-Trust Operational Qualified CA", not the roots (Root Qualified CA, Root CA5 are not services in it).
+  So the intermediate is the anchor; the validator accepts that (tested). The older "B-Trust Operational CA QES" (Root CA5 chain) is **withdrawn**
+  and expired in 2025: a card issued from that chain would not validate.
+- One certificate backs several services in the list (QC, registration, identity proofing); the check accepts it if any is a granted QC.
+
+### Open
+- The card was not readable (no token detected) so its issuing CA is unconfirmed; if it chains to the withdrawn CA5 QES the notary will refuse it.
+- The trusted list's own XML signature is not verified (pins are what is trusted); automatic LOTL/TL handling stays an open point in the spec.
+
 ## 2026-10-26 (choice) - several emails or phones, a default, and a pick on the approve page
 
 ### Added

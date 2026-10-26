@@ -152,6 +152,10 @@ jobs:
             echo "::error::no TEST_DOMAIN variable: a public server needs a domain (see README)"; exit 1
           fi
 
+      - name: Fetch the eID trust anchors (published links, pinned fingerprints, checked against the trusted list)
+        working-directory: deploy/test
+        run: python3 fetch-anchors.py --strict
+
       - name: Deploy
         working-directory: deploy/test
         run: ./deploy.sh "$DEPLOY_USER@$SERVER"

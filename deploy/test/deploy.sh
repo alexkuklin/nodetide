@@ -6,6 +6,7 @@
 #   ./deploy.sh user@server --dry-run           # show what would be copied, change nothing
 #   ./deploy.sh user@server --down              # stop the stack there (data volumes are kept)
 #
+# eID trust anchors: run ./fetch-anchors.py first (the workflow does) so they are synced with the rest.
 # Needs on the server: Docker with the compose plugin, and ssh access for that user. The build happens
 # on the server, from the copied sources, so no registry is involved. Prepare .env with:
 #   ./init.sh --domain example.org [--edge]
@@ -48,7 +49,8 @@ $RSYNC --exclude '.smoke' --exclude '__pycache__' ./ "$TARGET:$DIR/deploy/test/"
 
 COMMIT=$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)
 echo "building and starting on the server (commit $COMMIT) ..."
-ssh "$TARGET" "cd '$DIR/deploy/test' && GIT_COMMIT=$COMMIT docker compose up -d --build --remove-orphans && docker compose ps"
+# ANCHORS_REV changes whenever the trust anchors do, so the verifier (which reads them at start) is recreated
+ssh "$TARGET" "cd '$DIR/deploy/test' && ANCHORS_REV=\$(cat anchors/*.pem 2>/dev/null | sha256sum | cut -c1-16) GIT_COMMIT=$COMMIT docker compose up -d --build --remove-orphans && docker compose ps"
 
 . ./.env
 echo

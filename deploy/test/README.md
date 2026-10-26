@@ -158,7 +158,25 @@ node and the applications never see your certificate or personal number.
 3. Upload the `.p7s` in the wallet. It goes to the notary only and is not kept; the wallet keeps the attestations, which
    contain no certificate and nothing about the claims you left out.
 
-The notary needs the CA certificates it should trust in `deploy/test/anchors/` (**on the server's `.env`: `ANCHORS_DIR`**;
-real Borica / qualified TSP certificates for a real card; with none, the notary is off and the container says so).
-`python3 smoke.py prepare` makes a synthetic CA and points the verifier at it, `python3 smoke.py run` then covers the whole
-path, including that an unlisted birth date gets no attestation. Never deploy a `.env` that trusts the synthetic CA.
+### Trust anchors: published links, not copies
+
+The CA certificates the notary trusts are **not in the repository**. `trust-anchors.json` is the published list of links to
+where each provider publishes its certificates, each with the SHA-256 fingerprint it must have:
+
+| CA | Published at | Pinned SHA-256 |
+|---|---|---|
+| B-Trust Operational Qualified CA (BORICA AD, Bulgaria; valid to 2033-05-31) | https://ca.b-trust.org/repository/B-TrustOperationalQCA_DER.crt (listed on https://www.b-trust.bg/en/queries/certification-chains-installation) | `499a9ca8b47ee84437f90b96fb40413ea293f9b3942a160837a0c67b0ec5ba0c` |
+
+`./fetch-anchors.py` (stdlib only) downloads each link into `anchors/`, **refuses anything that does not match the pin**, and
+cross-checks every run against the country's EU trusted list (https://crc.bg/files/_en/TSL_BG.xml, found through the EU list
+of trusted lists at https://ec.europa.eu/tools/lotl/eu-lotl.xml): with `--strict` (the deploy workflow uses it) it stops if a
+pinned certificate is not a *granted qualified-certificate service* there any more. The trusted list names the qualified CA
+itself, not its root, so that intermediate is the anchor. The workflow runs it before every deploy and the verifier is
+recreated when the set changes. To trust another provider add an entry (link + fingerprint you checked) and open a pull request.
+
+How the pin was verified: downloaded from BORICA's repository over HTTPS, fingerprint computed locally, and found in the
+Bulgarian trusted list as service *B-Trust Operational Qualified CA*, type QC, status granted. The list's XML signature is not
+verified by the script (see the open point in `identity-system.md`), which is why the pin, not the list, is what is trusted.
+
+`python3 smoke.py prepare` still makes a synthetic CA and points the verifier at it for the local test; `python3 smoke.py run`
+covers the whole path, including that an unlisted birth date gets no attestation. Never deploy a `.env` that trusts it.

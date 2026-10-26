@@ -611,7 +611,7 @@ Not implemented, and not testable yet. Two ways to prove "a government vouches f
 
 ### Open points
 
-- Trusted-list handling: operators currently supply the CA certificates by hand; reading and refreshing the EU trusted lists automatically is not specified.
+- Trusted-list handling: the reference deployment keeps a published list of links to the CAs' own certificate downloads, each with a pinned SHA-256 fingerprint, and cross-checks every fetch against the member state's trusted list (a service of type QC with status granted). The trusted list's XML signature is not verified, and automatic refresh of the list of trusted lists is not specified.
 - Trusted timestamps (CAdES-T) are not required or checked, hence the short lifetimes above.
 - Transliteration rules beyond the Bulgarian Streamlined System.
 - Other claim types are namespaced `x-<vendor>:<name>` and have no verification methods yet.

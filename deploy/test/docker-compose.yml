@@ -78,9 +78,10 @@ services:
       # SMS codes go through a gateway with a modem (tools/sms-gateway) that fetches them with this token
       NODETIDE_SMS_GATEWAY_TOKEN: ${SMS_GATEWAY_TOKEN:-}
       NODETIDE_PHONE_ALLOWED: ${PHONE_ALLOWED:-}   # empty = the service's default: Bulgarian mobile numbers only
-      # eID notary: reads the person's certificate so nobody else has to; judged against ./anchors (real CA certificates)
+      # eID notary: reads the person's certificate so nobody else has to; judged against ./anchors, fetched by fetch-anchors.py
       NODETIDE_EIDAS_REVOCATION: ${EIDAS_REVOCATION:-hard-fail}
       NODETIDE_EIDAS_NAME_MATCH: ${EIDAS_NAME_MATCH:-transliterated}
+      ANCHORS_REV: ${ANCHORS_REV:-}   # changes with the anchors, so a changed set recreates the container
     volumes:
       - verifier-data:/data
       - issuer-share:/share
