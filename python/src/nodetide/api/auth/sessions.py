@@ -166,6 +166,7 @@ def get_required_capability(event_type: str) -> str | None:
         "set_recovery": None,   # master key only
         "add_claim": DeviceCapability.MANAGE_CLAIMS.value,
         "revoke_claim": DeviceCapability.MANAGE_CLAIMS.value,
+        "set_claim_order": DeviceCapability.MANAGE_CLAIMS.value,
     }
     return capability_map.get(event_type)
 

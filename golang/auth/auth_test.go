@@ -697,3 +697,63 @@ func TestDefaultDeviceCapabilitiesIncludeManageClaims(t *testing.T) {
 		t.Fatalf("default capabilities should include manage_claims: %v", err)
 	}
 }
+
+func (id *testIdentity) setClaimOrder(signer ed25519.PrivateKey, claimType string, order ...string) {
+	pub := signer.Public().(ed25519.PublicKey)
+	items := make([]any, len(order))
+	for i, o := range order {
+		items[i] = o
+	}
+	ev := map[string]any{
+		"version":    num(1),
+		"type":       "set_claim_order",
+		"alg":        "ed25519",
+		"hash_alg":   "sha256",
+		"timestamp":  num(nowUnix() - 1),
+		"prev":       id.head(),
+		"signed_by":  hex.EncodeToString(pub),
+		"claim_type": claimType,
+		"order":      items,
+	}
+	sign(id.t, signer, ev)
+	id.push(ev)
+}
+
+func TestClaimOrderEventIsAccepted(t *testing.T) {
+	id := newIdentity(t)
+	id.addClaim(id.masterPriv, "claim-0000000000001")
+	id.addClaim(id.masterPriv, "claim-0000000000002")
+	id.setClaimOrder(id.masterPriv, "email", "claim-0000000000002", "claim-0000000000001")
+	dev := id.addDevice("manage_claims")
+	id.setClaimOrder(dev, "email", "claim-0000000000001")
+	if sc := id.chain(); sc.Len() != 6 {
+		t.Fatalf("expected 6 events, got %d", sc.Len())
+	}
+}
+
+func TestClaimOrderEventIsChecked(t *testing.T) {
+	cases := map[string]func(id *testIdentity){
+		"unknown claim": func(id *testIdentity) { id.setClaimOrder(id.masterPriv, "email", "claim-0000000000009") },
+		"listed twice": func(id *testIdentity) {
+			id.setClaimOrder(id.masterPriv, "email", "claim-0000000000001", "claim-0000000000001")
+		},
+		"empty":      func(id *testIdentity) { id.setClaimOrder(id.masterPriv, "email") },
+		"wrong type": func(id *testIdentity) { id.setClaimOrder(id.masterPriv, "phone", "claim-0000000000001") },
+		"revoked": func(id *testIdentity) {
+			id.revokeClaim(id.masterPriv, "claim-0000000000001")
+			id.setClaimOrder(id.masterPriv, "email", "claim-0000000000001")
+		},
+		"device without manage_claims": func(id *testIdentity) {
+			dev := id.addDevice("sign_messages")
+			id.setClaimOrder(dev, "email", "claim-0000000000001")
+		},
+	}
+	for name, mutate := range cases {
+		id := newIdentity(t)
+		id.addClaim(id.masterPriv, "claim-0000000000001")
+		mutate(id)
+		if _, err := ParseSigchain(id.wire()); err == nil {
+			t.Errorf("%s must be rejected", name)
+		}
+	}
+}

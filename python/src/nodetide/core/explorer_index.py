@@ -15,6 +15,7 @@ from nodetide.core.identity import (
     GenesisEvent,
     ResolveForkEvent,
     RevokeClaimEvent,
+    SetClaimOrderEvent,
     RevokeDeviceEvent,
     RotateMasterEvent,
     SetDistributionEvent,
@@ -62,6 +63,8 @@ def summarize_event(event: SigchainEvent) -> str:
     if isinstance(event, RevokeClaimEvent):
         reason = f" ({_clip(event.reason)})" if event.reason else ""
         return f"Revoked claim {short(event.claim_id)}{reason}"
+    if isinstance(event, SetClaimOrderEvent):
+        return f"Set the order of {len(event.order)} {_clip(event.claim_type)} claim{'s' if len(event.order) != 1 else ''}"
     if isinstance(event, ResolveForkEvent):
         return "Resolved a fork"
     return event.type.value

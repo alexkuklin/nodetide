@@ -3,6 +3,25 @@
 Progress notes kept between sessions. Newest first. Each entry says what changed, why, and what is
 still open, so a new session can pick up without re-deriving context.
 
+## 2026-10-26 (choice) - several emails or phones, a default, and a pick on the approve page
+
+### Added
+- **`SET_CLAIM_ORDER` sigchain event**: master or a `manage_claims` device lists the claims of one type in preferred order (first = default).
+  Rules: 1 to 32 distinct existing, unrevoked claims of that type. `Sigchain.claim_order(type)` gives the effective order (newest event, minus
+  revoked/expired claims, then the unlisted ones in the order made); `Identity.set_claim_order(...)`. It reveals only claim ids. Added to the Python
+  chain verifier, the **Go chain verifier** (which rejects unknown event types), the explorer's event summary and the session capability map;
+  14 Python tests and 2 Go tests. Chose a chain event (like `SET_DISTRIBUTION`'s ordered list) over wallet-local state so the default follows the
+  identity across devices and recovery.
+- **Wallet**: the approve page shows one radio group per requested claim type (every usable claim in the holder's order, default preselected,
+  plus "share none"); the wallet refuses to present two values of one type. Dashboard: rank, "make default", move up/down per claim.
+- Spec: "Several claims of one type" (holder chooses per sign-in, at most one per type, default semantics). The bridge is unchanged: it keeps one
+  value per type (highest assurance, first on a tie), which is why wallets must send one.
+- Smoke test: two verified emails; default, change of default and an explicit pick each reach the application as chosen.
+
+### Open
+- Other wallets/apps must adopt the same "one per type, default preselected" behaviour; nothing enforces it beyond the bridge keeping one value.
+- No per-application memory yet ("always use my work email for this site"); it would be wallet-local state, not a chain event.
+
 ## 2026-10-25 (privacy) - eID notary: attest from a government signature without exposing it
 
 ### Added

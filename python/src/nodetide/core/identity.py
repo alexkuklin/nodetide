@@ -37,6 +37,7 @@ class EventType(str, Enum):
     SET_DISTRIBUTION = "set_distribution"
     ADD_CLAIM = "add_claim"
     REVOKE_CLAIM = "revoke_claim"
+    SET_CLAIM_ORDER = "set_claim_order"
 
 
 class IdentityType(str, Enum):
@@ -110,6 +111,7 @@ class SigchainEvent:
             EventType.SET_DISTRIBUTION: SetDistributionEvent,
             EventType.ADD_CLAIM: AddClaimEvent,
             EventType.REVOKE_CLAIM: RevokeClaimEvent,
+            EventType.SET_CLAIM_ORDER: SetClaimOrderEvent,
         }
 
         event_class = event_classes.get(event_type)
@@ -671,6 +673,59 @@ class AddClaimEvent(SigchainEvent):
 
 
 @dataclass(kw_only=True)
+class SetClaimOrderEvent(SigchainEvent):
+    """Say which claims of one type come first: the first is the holder's default (their preferred email, say).
+
+    Only claim ids are listed, so the event reveals nothing the add_claim events did not. The newest event for a
+    claim type wins; claims it does not list follow in the order they were made.
+    """
+
+    claim_type: str
+    order: list[str]
+
+    MAX_ORDER = 32
+
+    def __post_init__(self):
+        self.type = EventType.SET_CLAIM_ORDER
+
+    def to_dict(self) -> dict[str, Any]:
+        d = super().to_dict()
+        d.update({"claim_type": self.claim_type, "order": list(self.order)})
+        return d
+
+    @classmethod
+    def _from_dict(cls, data: dict[str, Any]) -> SetClaimOrderEvent:
+        return cls(
+            type=EventType.SET_CLAIM_ORDER,
+            timestamp=data["timestamp"],
+            prev=data["prev"],
+            signature=data["signature"],
+            signed_by=data["signed_by"],
+            version=data.get("version", 1),
+            alg=data.get("alg", DEFAULT_SIGN_ALG),
+            hash_alg=data.get("hash_alg", DEFAULT_HASH_ALG),
+            claim_type=data["claim_type"],
+            order=list(data["order"]),
+        )
+
+    @classmethod
+    def create(cls, signer: KeyPair | SigningKey, prev_hash: str, claim_type: str, order: list[str]) -> SetClaimOrderEvent:
+        """Create and sign an order event (signer: master or manage_claims device)."""
+        event = cls(
+            type=EventType.SET_CLAIM_ORDER,
+            timestamp=int(time.time()),
+            prev=prev_hash,
+            signature="",
+            signed_by=signer.verify_key.to_hex(),
+            claim_type=claim_type,
+            order=list(order),
+        )
+        signable = json.dumps(event.signable_dict(), sort_keys=True, separators=(",", ":"))
+        event.signature = signer.sign_hex(signable.encode("utf-8"))
+        return event
+
+
+@dataclass(kw_only=True)
 class RevokeClaimEvent(SigchainEvent):
     """Withdraw a claim."""
 
@@ -890,6 +945,20 @@ class Sigchain:
     def get_claim(self, claim_id: str) -> ClaimRecord | None:
         return next((c for c in self.get_claims() if c.claim_id == claim_id), None)
 
+    def claim_order(self, claim_type: str, at_time: int | None = None) -> list[str]:
+        """Active claims of one type, the holder's preferred first.
+
+        The newest set_claim_order event for the type decides (ids that have since been revoked or expired drop
+        out); active claims it does not list follow in the order they were made.
+        """
+        active = [c.claim_id for c in self.get_claims() if c.claim_type == claim_type and c.status(at_time) == "active"]
+        listed: list[str] = []
+        for event in self.events:
+            if isinstance(event, SetClaimOrderEvent) and event.claim_type == claim_type:
+                listed = list(event.order)
+        first = [c for c in listed if c in active]
+        return first + [c for c in active if c not in first]
+
     def get_recovery_config(self) -> SetRecoveryEvent | None:
         """Get the current recovery configuration."""
         recovery = None
@@ -925,6 +994,7 @@ class Sigchain:
         devices: dict[str, tuple[list[str], int | None]] = {}
         revoked: set[str] = set()
         claim_states: dict[str, bool] = {}  # claim_id -> revoked?
+        claim_types: dict[str, str] = {}    # claim_id -> claim type
 
         # Verify each subsequent event
         for i, event in enumerate(self.events[1:], start=1):
@@ -949,7 +1019,7 @@ class Sigchain:
                     devices[event.device_pubkey] = (list(event.capabilities or []), event.expires)
                 elif isinstance(event, RevokeDeviceEvent):
                     revoked.add(event.device_pubkey)
-            elif isinstance(event, (AddClaimEvent, RevokeClaimEvent)):
+            elif isinstance(event, (AddClaimEvent, RevokeClaimEvent, SetClaimOrderEvent)):
                 # Master, or a currently valid device with manage_claims
                 if event.signed_by != current_master:
                     caps, expires = devices.get(event.signed_by, ([], None))
@@ -965,6 +1035,20 @@ class Sigchain:
                     if event.claim_id in claim_states:
                         return False, f"Event {i}: duplicate claim_id"
                     claim_states[event.claim_id] = False
+                    claim_types[event.claim_id] = event.claim_type
+                elif isinstance(event, SetClaimOrderEvent):
+                    order = event.order
+                    if not isinstance(order, list) or not 1 <= len(order) <= SetClaimOrderEvent.MAX_ORDER:
+                        return False, f"Event {i}: a claim order lists between 1 and {SetClaimOrderEvent.MAX_ORDER} claims"
+                    if len(set(order)) != len(order) or not all(isinstance(c, str) for c in order):
+                        return False, f"Event {i}: a claim is listed twice"
+                    for claim_id in order:
+                        if claim_id not in claim_states:
+                            return False, f"Event {i}: orders an unknown claim"
+                        if claim_states[claim_id]:
+                            return False, f"Event {i}: orders a revoked claim"
+                        if claim_types[claim_id] != event.claim_type:
+                            return False, f"Event {i}: orders a claim of another type"
                 else:
                     if event.claim_id not in claim_states:
                         return False, f"Event {i}: revokes an unknown claim"
@@ -1125,6 +1209,20 @@ class Identity:
         event = AddClaimEvent.create(
             signer, self.sigchain.head_hash, claim_id, claim_type, commitment, expires
         )
+        self.sigchain.append(event)
+        return event
+
+    def set_claim_order(
+        self,
+        claim_type: str,
+        order: list[str],
+        signer: KeyPair | SigningKey | None = None,
+    ) -> SetClaimOrderEvent:
+        """Say which claims of a type come first (the first is the default)."""
+        signer = signer or self.local_keypair
+        if signer is None:
+            raise ValueError("Cannot order claims: no signing key")
+        event = SetClaimOrderEvent.create(signer, self.sigchain.head_hash, claim_type, order)
         self.sigchain.append(event)
         return event
 

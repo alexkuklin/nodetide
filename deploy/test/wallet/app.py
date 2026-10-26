@@ -46,6 +46,7 @@ DATA_DIR = Path(os.environ.get("DATA_DIR", "/data"))
 STATE_FILE = DATA_DIR / "wallet.json"
 STATEMENT_DAYS = 7
 SIGNIN_TTL = 600
+ASSURANCE_RANK = {"low": 0, "substantial": 1, "high": 2}
 CODE_CLAIMS = ("email", "phone")  # verified by the verification service with a one-time code
 
 
@@ -301,15 +302,26 @@ async def signin_preview(login: str) -> dict[str, Any]:
             challenge = await resp.json(content_type=None)
             if resp.status != 200:
                 raise WalletError(f"cannot fetch the challenge: {challenge}", 502)
-    wanted = {c["claim_type"] for c in challenge["display"].get("claims_requested", [])}
+    asked_types = [c["claim_type"] for c in challenge["display"].get("claims_requested", [])]
     now = int(time.time())
     docs = {d.claim_id: d for d in wallet.documents()}
-    candidates = [
-        {"attestation_id": a_id, "claim_type": a["claim_type"], "method": a["method"], "assurance": a["assurance"],
-         "expires_at": a["expires_at"], "value": docs[a["claim_id"]].value}
-        for a in wallet.state["attestations"] if a["claim_type"] in wanted and a["claim_id"] in docs and a["expires_at"] > now
-        for a_id in [Attestation.from_dict({k: v for k, v in a.items() if not k.startswith("_")}).id]
-    ]
+    chain = wallet.identity.sigchain
+    candidates: list[dict[str, Any]] = []
+    for claim_type in dict.fromkeys(asked_types):
+        # one candidate per claim (its best attestation), in the order the holder prefers: the first is the default
+        for claim_id in chain.claim_order(claim_type):
+            usable = [a for a in wallet.state["attestations"]
+                      if a["claim_id"] == claim_id and a["expires_at"] > now and claim_id in docs]
+            if not usable:
+                continue
+            best = max(usable, key=lambda a: (ASSURANCE_RANK[a["assurance"]], a["expires_at"]))
+            clean = {k: v for k, v in best.items() if not k.startswith("_")}
+            candidates.append({
+                "attestation_id": Attestation.from_dict(clean).id, "claim_id": claim_id, "claim_type": claim_type,
+                "method": best["method"], "assurance": best["assurance"], "expires_at": best["expires_at"],
+                "value": docs[claim_id].value,
+                "default": not any(c["claim_type"] == claim_type for c in candidates),
+            })
     token = secrets.token_urlsafe(16)
     wallet.pending = {t: p for t, p in wallet.pending.items() if p["expires"] > now}
     wallet.pending[token] = {"challenge": challenge, "candidates": candidates, "expires": now + SIGNIN_TTL}
@@ -332,6 +344,9 @@ async def signin_approve(token: str, share: list[str]) -> dict[str, Any]:
             if chain:
                 item["issuer_sigchain"] = chain
             presentations.append(item)
+    types = [p["attestation"]["claim_type"] for p in presentations]
+    if len(types) != len(set(types)):
+        raise WalletError("choose one value per claim type (for example one email), not several")
     assertion = create_assertion(challenge["request"], identity.identity_hash or "", wallet.device,
                                  identity.sigchain.head_hash or "")
     async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=60)) as http:
@@ -401,13 +416,17 @@ def state_view() -> dict[str, Any]:
     identity, now = wallet.identity, int(time.time())
     docs = {d.claim_id: d for d in wallet.documents()}
     claims = []
+    orders = {t: identity.sigchain.claim_order(t) for t in {r.claim_type for r in identity.sigchain.get_claims()}}
     for record in identity.sigchain.get_claims():
         doc = docs.get(record.claim_id)
         atts = [{"attestation_id": Attestation.from_dict({k: v for k, v in a.items() if not k.startswith("_")}).id,
                  "method": a["method"], "assurance": a["assurance"], "expires_at": a["expires_at"],
                  "expired": a["expires_at"] <= now, "node_verdict": a.get("_node_verdict", "")}
                 for a in wallet.state["attestations"] if a["claim_id"] == record.claim_id]
+        order = orders.get(record.claim_type, [])
+        rank = order.index(record.claim_id) + 1 if record.claim_id in order else None
         claims.append({"claim_id": record.claim_id, "claim_type": record.claim_type, "status": record.status(now),
+                       "rank": rank, "default": rank == 1 and len(order) > 1,
                        "value": doc.value if doc else None, "attestations": atts,
                        })
     return {"identity": identity.identity_hash, "claims": claims}
@@ -422,6 +441,36 @@ async def api_claim_email(request: web.Request) -> web.Response:
     document = wallet.add_claim("email", str(data.get("address", "")))
     await publish()
     return done(request, {"claim_id": document.claim_id}, "email claim created")
+
+
+async def reorder(claim_id: str, how: str) -> str:
+    """Make a claim the default of its type, or move it up or down; recorded on the identity's chain."""
+    identity = wallet.identity
+    record = identity.sigchain.get_claim(claim_id)
+    if record is None or record.status() != "active":
+        raise WalletError("unknown or inactive claim", 404)
+    order = identity.sigchain.claim_order(record.claim_type)
+    index = order.index(claim_id)
+    if how == "default":
+        order.insert(0, order.pop(index))
+    elif how == "up" and index > 0:
+        order[index - 1], order[index] = order[index], order[index - 1]
+    elif how == "down" and index < len(order) - 1:
+        order[index + 1], order[index] = order[index], order[index + 1]
+    elif how not in ("default", "up", "down"):
+        raise WalletError("how must be default, up or down")
+    identity.set_claim_order(record.claim_type, order)
+    wallet.state["sigchain"] = identity.sigchain.to_list()
+    wallet.save()
+    await publish()
+    return record.claim_type
+
+
+async def api_claim_order(request: web.Request) -> web.Response:
+    data = await params(request)
+    claim_type = await reorder(request.match_info["id"], str(data.get("how", "default")))
+    return done(request, {"claim_type": claim_type, "order": wallet.identity.sigchain.claim_order(claim_type)},
+                f"Order of your {claim_type} claims updated.")
 
 
 async def api_claim_phone(request: web.Request) -> web.Response:
@@ -507,7 +556,8 @@ async def api_signin_approve(request: web.Request) -> web.Response:
     if isinstance(share, str):
         share = [share]
     if "_multi" in data:
-        share = data["_multi"].get("share", [])
+        multi = data["_multi"]
+        share = list(multi.get("share", [])) + [v for k, vs in multi.items() if k.startswith("share_") for v in vs if v]
     result = await signin_approve(str(data.get("token", "")), [str(s) for s in share])
     if wants_json(request):
         return web.json_response(result)
@@ -538,16 +588,25 @@ def layout(body: str, request: web.Request | None = None) -> str:
 
 def signin_page(preview: dict[str, Any]) -> str:
     asked = ", ".join(c["claim_type"] for c in preview["claims_requested"]) or "nothing beyond your identity"
-    rows = "".join(
-        f'<tr><td><input type="checkbox" name="share" value="{esc(c["attestation_id"])}" checked></td>'
-        f'<td>{esc(c["claim_type"])}</td><td>{esc(json.dumps(c["value"], ensure_ascii=False))}</td>'
-        f'<td>{esc(c["method"])} / {esc(c["assurance"])}</td></tr>' for c in preview["candidates"])
-    table = (f"<table><tr><th></th><th>claim</th><th>value that will be revealed</th><th>attested by</th></tr>{rows}</table>"
-             if rows else '<p class="muted">You hold no attestation that fits; you will sign in with your identity only.</p>')
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for c in preview["candidates"]:
+        groups.setdefault(c["claim_type"], []).append(c)
+    blocks = []
+    for claim_type, options in groups.items():
+        radios = "".join(
+            f'<label><input type="radio" name="share_{esc(claim_type)}" value="{esc(c["attestation_id"])}"'
+            f'{" checked" if c["default"] else ""}> {esc(json.dumps(c["value"], ensure_ascii=False))} '
+            f'<span class="muted">({esc(c["method"])} / {esc(c["assurance"])}{", your default" if c["default"] and len(options) > 1 else ""})'
+            f'</span></label><br>' for c in options)
+        radios += (f'<label><input type="radio" name="share_{esc(claim_type)}" value=""> '
+                   f'<span class="muted">share no {esc(claim_type)}</span></label>')
+        blocks.append(f"<p><b>{esc(claim_type)}</b><br>{radios}</p>")
+    chosen = "".join(blocks) if blocks else '<p class="muted">You hold no attestation that fits; you will sign in with your identity only.</p>'
     return layout(f"""<h2>Approve sign-in?</h2>
 <p><b>{esc(preview['client'])}</b> (via <code>{esc(preview['issuer'])}</code>) asks for: {esc(asked)}.</p>
+<p class="muted">Pick what to reveal, one value per kind. Your default is preselected; change defaults on the <a href="/">dashboard</a>.</p>
 <form method="post" action="/api/signin/approve"><input type="hidden" name="token" value="{esc(preview['token'])}">
-{table}<p><button>Approve</button> <a href="/">Cancel</a></p></form>""")
+{chosen}<p><button>Approve</button> <a href="/">Cancel</a></p></form>""")
 
 
 async def signin_link(request: web.Request) -> web.Response:
@@ -618,6 +677,15 @@ async def dashboard(request: web.Request) -> web.Response:
                             + (f'<div class="muted">{esc(note)}</div>' if note else ""))
         else:
             actions = '<span class="muted">see "Prove claims with your eID card" below</span>' if c["claim_type"] in NOTARIZABLE else ""
+        siblings = [x for x in view["claims"] if x["claim_type"] == c["claim_type"] and x["rank"]]
+        if len(siblings) > 1 and c["rank"]:
+            badge = "<b>default</b>" if c["default"] else "#" + str(c["rank"])
+            order_ui = (f"<div>{badge} "
+                        + "".join(f'<form method="post" action="/api/claims/{cid}/order" style="display:inline">'
+                                  f'<input type="hidden" name="how" value="{how}"><button>{label}</button></form>'
+                                  for how, label in (("default", "make default"), ("up", "&#9650;"), ("down", "&#9660;"))
+                                  if not (c["default"] and how in ("default", "up"))) + "</div>")
+            actions = order_ui + actions
         rows.append(f"<tr><td>{esc(c['claim_type'])}<br><code>{cid[:8]}</code></td><td>{esc(c['status'])}</td>"
                     f"<td>{esc(shown)}</td><td>{atts}</td><td>{actions}</td></tr>")
     table = ("<table><tr><th>claim</th><th>status</th><th>value (private)</th><th>attestations</th><th></th></tr>"
@@ -659,6 +727,7 @@ def build_app() -> web.Application:
     app.router.add_post("/api/claims/{id}/confirm-email", api_confirm_email)
     app.router.add_route("*", "/api/eid/statement", api_eid_statement)
     app.router.add_post("/api/eid/signature", api_eid_signature)
+    app.router.add_post("/api/claims/{id}/order", api_claim_order)
     app.router.add_post("/api/claims/birthdate", api_claim_birthdate)
     app.router.add_post("/api/claims/age", api_claim_age)
     app.router.add_post("/api/signin/preview", api_signin_preview)

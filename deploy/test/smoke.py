@@ -160,7 +160,7 @@ async def wait_ready(http: aiohttp.ClientSession, url: str, seconds: int = 90) -
     raise RuntimeError(f"{url} did not come up")
 
 
-async def sign_in(env: dict[str, str], resolver, wallet, check: Check, share_claims: bool, label: str) -> dict:
+async def sign_in(env: dict[str, str], resolver, wallet, check: Check, share_claims: bool, label: str, choose=None) -> dict:
     """One complete OIDC sign-in through the relying party, approved by the wallet."""
     node, rp = env["NODE_URL"], env["RP_URL"]
     jar = aiohttp.CookieJar(unsafe=True)
@@ -172,7 +172,9 @@ async def sign_in(env: dict[str, str], resolver, wallet, check: Check, share_cla
         preview = await wallet("POST", "/api/signin/preview", {"login_url": page_url})
         asked = [c["claim_type"] for c in preview["claims_requested"]]
         check.expect({"email", "legal_name"} <= set(asked) or {"email"} <= set(asked), f"{label}: the wallet sees what the application asked for", ", ".join(asked))
-        share = [c["attestation_id"] for c in preview["candidates"]] if share_claims else []
+        # one value per claim type: the holder's default unless a choice is made
+        defaults = [c for c in preview["candidates"] if c["default"]]
+        share = [c["attestation_id"] for c in (choose(preview["candidates"]) if choose else defaults)] if share_claims else []
         approval = await wallet("POST", "/api/signin/approve", {"token": preview["token"], "share": share})
         check.expect(approval.get("http_status") == 200, f"{label}: the wallet's approval is accepted", approval.get("message", ""))
 
@@ -336,6 +338,23 @@ async def run() -> int:
             frameworks = [v["verification"]["trust_framework"] for v in shared.get("verified_claims", [])]
             check.expect(frameworks == ["eidas"], "verified_claims names the eIDAS trust framework", str(frameworks))
             check.expect("birthdate" not in shared and "age_over_18" not in shared, "age and birth date are not released: this application did not ask")
+
+        print("several verified emails: a default, and a choice on the approve page")
+        second = "second@example.com"
+        second_id = (await wallet("POST", "/api/claims/email", {"address": second}))["claim_id"]
+        started_at = time.time()
+        await wallet("POST", f"/api/claims/{second_id}/verify-email")
+        await wallet("POST", f"/api/claims/{second_id}/confirm-email",
+                     {"code": await mailbox_code(http, mail_url(env), second, started_at)})
+        both = await sign_in(env, resolver, wallet, check, True, "default email")
+        check.expect(both.get("email") == EMAIL, "the first email stays the default", str(both.get("email")))
+        order = await wallet("POST", f"/api/claims/{second_id}/order", {"how": "default"})
+        check.expect(order["order"][0] == second_id, "the second email is made the default (an event on the identity's chain)")
+        switched = await sign_in(env, resolver, wallet, check, True, "new default")
+        check.expect(switched.get("email") == second, "the new default is what the application receives", str(switched.get("email")))
+        picked = await sign_in(env, resolver, wallet, check, True, "explicit choice",
+                               choose=lambda cs: [c for c in cs if c["claim_type"] == "email" and not c["default"]])
+        check.expect(picked.get("email") == EMAIL, "choosing the other email on the approve page releases that one", str(picked.get("email")))
 
         private = await sign_in(env, resolver, wallet, check, False, "not sharing")
         check.expect("email" not in private and "verified_claims" not in private, "nothing is released when the wallet shares nothing")

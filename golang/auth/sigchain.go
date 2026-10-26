@@ -84,6 +84,7 @@ func ParseSigchain(raw []any) (*Sigchain, error) {
 	devices := map[string]deviceState{}
 	revoked := map[string]bool{}
 	claims := map[string]bool{}
+	claimTypes := map[string]string{}
 
 	for i, item := range raw {
 		ev, ok := item.(map[string]any)
@@ -163,7 +164,7 @@ func ParseSigchain(raw []any) (*Sigchain, error) {
 						revoked[pub] = true
 					}
 				}
-			case "add_claim", "revoke_claim":
+			case "add_claim", "revoke_claim", "set_claim_order":
 				// Master, or a currently valid device holding manage_claims.
 				if signedBy != sc.master {
 					d, known := devices[signedBy]
@@ -175,6 +176,33 @@ func ParseSigchain(raw []any) (*Sigchain, error) {
 						return nil, fmt.Errorf("event %d: signer may not manage claims", i)
 					}
 				}
+				if typ == "set_claim_order" {
+					// The holder's preferred claims of one type, first = default.
+					claimType, ok := stringField(ev, "claim_type")
+					order, isList := ev["order"].([]any)
+					if !ok || !isList || len(order) < 1 || len(order) > 32 {
+						return nil, malformed("event %d: a claim order lists between 1 and 32 claims", i)
+					}
+					seen := map[string]bool{}
+					for _, item := range order {
+						id, isString := item.(string)
+						if !isString || seen[id] {
+							return nil, fmt.Errorf("event %d: a claim is listed twice", i)
+						}
+						seen[id] = true
+						isRevoked, exists := claims[id]
+						if !exists {
+							return nil, fmt.Errorf("event %d: orders an unknown claim", i)
+						}
+						if isRevoked {
+							return nil, fmt.Errorf("event %d: orders a revoked claim", i)
+						}
+						if claimTypes[id] != claimType {
+							return nil, fmt.Errorf("event %d: orders a claim of another type", i)
+						}
+					}
+					break
+				}
 				claimID, ok := stringField(ev, "claim_id")
 				if !ok {
 					return nil, malformed("event %d: missing claim_id", i)
@@ -184,6 +212,7 @@ func ParseSigchain(raw []any) (*Sigchain, error) {
 						return nil, fmt.Errorf("event %d: duplicate claim_id", i)
 					}
 					claims[claimID] = false
+					claimTypes[claimID], _ = stringField(ev, "claim_type")
 				} else {
 					isRevoked, exists := claims[claimID]
 					if !exists {

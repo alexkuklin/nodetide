@@ -83,6 +83,7 @@ Identity = hash(event_0) = "7f3a8b..." (stable forever)
 | `SOCIAL_RECOVERY` | threshold of trustees | Emergency recovery |
 | `ADD_CLAIM` | master or device with `manage_claims` | Commit to a claim about this identity (value stays off-chain) |
 | `REVOKE_CLAIM` | master or device with `manage_claims` | Withdraw a claim |
+| `SET_CLAIM_ORDER` | master or device with `manage_claims` | Say which claims of one type come first; the first is the holder's default |
 
 ## Revocation
 
@@ -204,7 +205,7 @@ Distribution points are hints, not authoritative. The identity hash remains the 
 2. Track current valid master key
 3. Track active device keys (added, not revoked, not expired)
 4. Accept messages signed by any currently-valid key
-5. `ADD_CLAIM` and `REVOKE_CLAIM` must be signed by the current master key or by a device that was added, not revoked, not expired at the event's time, and holds `manage_claims`. A `claim_id` may be added only once; a revocation must name an existing, not yet revoked claim. Chains that break these rules are invalid.
+5. `ADD_CLAIM` and `REVOKE_CLAIM` must be signed by the current master key or by a device that was added, not revoked, not expired at the event's time, and holds `manage_claims`. A `claim_id` may be added only once; a revocation must name an existing, not yet revoked claim. A `SET_CLAIM_ORDER` (same signers) lists 1 to 32 distinct claim ids that exist, are not revoked and have the event's `claim_type`. Chains that break these rules are invalid.
 
 ## Design Decisions
 
@@ -426,6 +427,11 @@ ADD_CLAIM = {                      # sigchain event; master or device with manag
 
 REVOKE_CLAIM = { claim_id, reason, prev, sig }
 
+SET_CLAIM_ORDER = {                # sigchain event; master or device with manage_claims
+  claim_type: "email", order: [<claim id>, ...],   # first = the holder's default
+  prev: <hash>, sig: ...
+}
+
 ClaimDocument = {                  # kept by the holder; NOT on the chain
   identity: <identity hash>,
   claim_id, claim_type,
@@ -580,6 +586,14 @@ How much an attestation is worth is then `path trust to its issuer`, combined wi
 ### Migration from IdentityAssertion
 
 `IdentityAssertion` (a third party's opinion, with a confidence from −1 to +1, about who an identity is) is withdrawn. Its use cases move to claims: the holder states a name, someone verifies it. What has no counterpart yet is the *negative* assertion ("this is not that person"); a separate `Dispute` object may fill that role later. Implementations remove it: nodes no longer accept, store, serve or use assertions in trust calculation.
+
+### Several claims of one type
+
+An identity may hold several claims of the same type (two emails, a work and a private phone), each with its own attestations. Nothing merges them:
+
+- **The holder chooses, per sign-in.** A relying party asks for a *type* (a scope); the holder presents **at most one** claim of each type, picking it on the approval screen, or none. Wallets MUST NOT present two claims of one type in a single sign-in; a bridge keeps one value per type (the highest assurance, the first presented on a tie).
+- **A default.** `SET_CLAIM_ORDER` records the holder's preference for one type as an ordered list of claim ids. The newest event for a type wins. The *effective order* is that list minus claims that have since been revoked or expired, followed by the type's active claims it does not list, in the order they were made. The first claim in the effective order that has a usable attestation is what a wallet preselects. A holder can have different phones or emails preferred on different devices only by not using the event; the event exists so the choice follows the identity to every device and survives recovery.
+- **What it reveals.** Only claim ids, which the `ADD_CLAIM` events already show. It is a preference for wallets, not a statement relying parties may rely on; they never need it, since they receive exactly what the holder chose to present.
 
 ### Privacy
 
