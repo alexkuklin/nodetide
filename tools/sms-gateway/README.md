@@ -79,6 +79,26 @@ WantedBy=multi-user.target
 
 (`--state` defaults to `$HOME/.nodetide-sms-gateway/ledger.json`; with the unit above that is the service's state directory.)
 
+## Docker
+
+The `Dockerfile` here packages the script (Python slim, pyserial, non-root user, ledger in the `/data` volume).
+Steps 1 and 3 of the setup still apply on the host: the modem must appear as a serial port, and ModemManager must
+leave it alone.
+
+```
+cd tools/sms-gateway
+install -m 600 /dev/null .env      # then put in it:
+#   SMS_GATEWAY_SERVER=https://nt-verifier.<domain>
+#   SMS_GATEWAY_TOKEN=<token from the service's .env>
+#   SMS_GATEWAY_DEVICE=/dev/serial/by-id/usb-YOUR_MODEM-if00-port0   (default /dev/ttyUSB0)
+docker compose run --rm sms-gateway --selftest-modem     # signal, operator, registration
+docker compose up -d
+```
+
+The container gets only the modem device (plus the `dialout` group), a read-only root filesystem, no capabilities,
+and the named volume `gateway-data` for the limits ledger, so the counters survive recreation. Extra options
+(`--allow`, `--max-sms`, ...) go after the service name in `docker compose run`, or as `command:` in the compose file.
+
 ## Behaviour worth knowing
 
 - A wrong or revoked token stops the script (it does not retry forever); network errors back off up to a minute.

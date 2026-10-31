@@ -1,0 +1,21 @@
+# Run next to the modem:  docker compose up -d
+# Put SMS_GATEWAY_SERVER, SMS_GATEWAY_TOKEN (and optionally SMS_GATEWAY_DEVICE) in a .env file (mode 600).
+services:
+  sms-gateway:
+    build: .
+    restart: unless-stopped
+    environment:
+      SMS_GATEWAY_SERVER: ${SMS_GATEWAY_SERVER:?set the verification service address}
+      SMS_GATEWAY_TOKEN: ${SMS_GATEWAY_TOKEN:?set the gateway token}
+      SMS_GATEWAY_DEVICE: ${SMS_GATEWAY_DEVICE:-/dev/ttyUSB0}
+    devices:
+      - "${SMS_GATEWAY_DEVICE:-/dev/ttyUSB0}"
+    group_add:
+      - dialout
+    volumes:
+      - gateway-data:/data
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+volumes:
+  gateway-data:
